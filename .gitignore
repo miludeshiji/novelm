@@ -3,3 +3,12 @@
 docs/
 .superpowers/
 .worktrees/
+.vs/
+**/bin/
+**/obj/
+TestResults/
+artifacts/
+publish/
+data/
+*.user
+*.suo
