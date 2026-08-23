@@ -22,6 +22,7 @@ internal sealed class SignalRUserApi : IUserApi
             response.Id,
             response.UserName,
             response.Avatar,
-            response.Role.Name);
+            response.Role.Name,
+            response.InteriorLevel ?? 0);
     }
 }

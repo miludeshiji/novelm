@@ -40,6 +40,43 @@ public sealed class SignalRUserApiTests
         Assert.AreEqual(typeof(UserProfileDto), connection.Calls[0].ResponseType);
     }
 
+    [TestMethod]
+    public async Task GetMyInfoAsync_MapsOptionalInteriorLevel()
+    {
+        var response = new UserProfileDto
+        {
+            Id = 42,
+            UserName = "reader",
+            Avatar = "avatar.png",
+            Role = new RoleDto { Name = "Member" },
+            InteriorLevel = 5
+        };
+        var connection = new TypedFakeSignalRConnection<UserProfileDto>(response);
+        var api = new SignalRUserApi(connection);
+
+        var result = await api.GetMyInfoAsync(CancellationToken.None);
+
+        Assert.AreEqual(5, result.InteriorLevel);
+    }
+
+    [TestMethod]
+    public async Task GetMyInfoAsync_MissingInteriorLevel_DefaultsToZero()
+    {
+        var response = new UserProfileDto
+        {
+            Id = 42,
+            UserName = "reader",
+            Avatar = "avatar.png",
+            Role = new RoleDto { Name = "Member" }
+        };
+        var connection = new TypedFakeSignalRConnection<UserProfileDto>(response);
+        var api = new SignalRUserApi(connection);
+
+        var result = await api.GetMyInfoAsync(CancellationToken.None);
+
+        Assert.AreEqual(0, result.InteriorLevel);
+    }
+
     private sealed record Invocation(
         string MethodName,
         object? Request,

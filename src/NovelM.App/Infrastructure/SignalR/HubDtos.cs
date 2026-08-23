@@ -21,6 +21,8 @@ internal sealed class UserProfileDto
 
     [JsonRequired]
     public required RoleDto Role { get; init; }
+
+    public int? InteriorLevel { get; init; }
 }
 
 internal sealed class ChapterSummaryDto
