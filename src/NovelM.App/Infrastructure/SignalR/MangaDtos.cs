@@ -24,8 +24,7 @@ internal sealed class ComicListItemDto
 
 internal sealed class ComicListResponseDto
 {
-    [JsonRequired]
-    public required IReadOnlyList<ComicListItemDto> Data { get; init; }
+    public IReadOnlyList<ComicListItemDto>? Data { get; init; }
 
     [JsonRequired]
     public required int Page { get; init; }
@@ -171,8 +170,7 @@ internal sealed class ComicBookDto
 
     public ComicReadPositionDto? ReadPosition { get; init; }
 
-    [JsonRequired]
-    public required IReadOnlyList<ComicChapterSummaryDto> Chapters { get; init; }
+    public IReadOnlyList<ComicChapterSummaryDto>? Chapters { get; init; }
 }
 
 internal sealed class ComicSeriesInfoResponseDto
@@ -180,6 +178,5 @@ internal sealed class ComicSeriesInfoResponseDto
     [JsonRequired]
     public required ComicSeriesDto Series { get; init; }
 
-    [JsonRequired]
-    public required IReadOnlyList<ComicBookDto> Books { get; init; }
+    public IReadOnlyList<ComicBookDto>? Books { get; init; }
 }

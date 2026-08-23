@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using NovelM.Tests.TestSupport;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Connection;
 using NovelM_App.Domain.Manga;
@@ -48,7 +49,7 @@ public sealed class SignalRMangaApiTests
         Assert.AreEqual(updatedAt, result.Items[0].LastUpdatedAt);
 
         var call = AssertSingleCall(connection);
-        Assert.AreEqual(HubMethodNames.GetComicList, call.MethodName);
+        Assert.AreEqual("GetComicList", call.MethodName);
         Assert.AreEqual(typeof(ComicListResponseDto), call.ResponseType);
         Assert.AreEqual(cancellation.Token, call.CancellationToken);
         AssertJsonEquivalent(
@@ -67,7 +68,7 @@ public sealed class SignalRMangaApiTests
         await api.SearchAsync("芙莉莲", "fuzzy", 1, 24, cancellation.Token);
 
         var call = AssertSingleCall(connection);
-        Assert.AreEqual(HubMethodNames.SearchComicSeries, call.MethodName);
+        Assert.AreEqual("SearchComicSeries", call.MethodName);
         Assert.AreEqual(typeof(ComicListResponseDto), call.ResponseType);
         Assert.AreEqual(cancellation.Token, call.CancellationToken);
         AssertJsonEquivalent(
@@ -210,7 +211,7 @@ public sealed class SignalRMangaApiTests
             volume.Chapters[0]);
 
         var call = AssertSingleCall(connection);
-        Assert.AreEqual(HubMethodNames.GetComicSeriesInfo, call.MethodName);
+        Assert.AreEqual("GetComicSeriesInfo", call.MethodName);
         Assert.AreEqual(typeof(ComicSeriesInfoResponseDto), call.ResponseType);
         Assert.AreEqual(cancellation.Token, call.CancellationToken);
         AssertJsonEquivalent(
@@ -302,6 +303,122 @@ public sealed class SignalRMangaApiTests
         Assert.AreEqual("fallback author", result.Author);
     }
 
+    [TestMethod]
+    [DataRow("""{"Page":3,"TotalPages":4}""")]
+    [DataRow("""{"Data":null,"Page":3,"TotalPages":4}""")]
+    public async Task DecodeListResponse_NullOrMissingDataMapsEmptyItems(
+        string json)
+    {
+        var response = Decode<ComicListResponseDto>(json, "GetComicList");
+        var api = new SignalRMangaApi(
+            new TypedFakeSignalRConnection<ComicListResponseDto>(response));
+
+        var result = await api.GetListAsync(
+            3,
+            24,
+            ComicOrder.Latest,
+            CancellationToken.None);
+
+        Assert.AreEqual(3, result.Page);
+        Assert.AreEqual(4, result.TotalPages);
+        Assert.AreEqual(0, result.Items.Count);
+    }
+
+    [TestMethod]
+    public async Task GetSeriesAsync_NullBooksMapsEmptyVolumes()
+    {
+        var response = new ComicSeriesInfoResponseDto
+        {
+            Series = MinimalSeries(),
+            Books = null!
+        };
+        var api = new SignalRMangaApi(
+            new TypedFakeSignalRConnection<ComicSeriesInfoResponseDto>(response));
+
+        var result = await api.GetSeriesAsync(
+            "Title",
+            ComicOrder.Latest,
+            CancellationToken.None);
+
+        Assert.AreEqual(0, result.Volumes.Count);
+    }
+
+    [TestMethod]
+    public async Task DecodeSeriesResponse_MapsProtocolFieldsAndNullChapters()
+    {
+        const string json = """
+            {
+              "Series": {
+                "Id": "series-frieren",
+                "Title": "Frieren",
+                "OriginalTitle": null,
+                "Cover": "series.png",
+                "Author": null,
+                "Views": 9876,
+                "Favorite": 432,
+                "Introduction": "Journey after the adventure.",
+                "CreatedAt": "2025-01-02T03:04:05+08:00",
+                "LastUpdatedChapter": "Chapter 12",
+                "LastUpdatedAt": "2026-08-21T10:00:00+08:00",
+                "Extra": {
+                  "classification": {
+                    "author": "Kanehito Yamada",
+                    "subject_id": 40000,
+                    "series_name_cn": "葬送的芙莉莲",
+                    "tags": ["奇幻", "冒险"]
+                  }
+                }
+              },
+              "Books": [
+                {
+                  "Id": 88,
+                  "Title": "Volume 1",
+                  "Uploader": { "UserName": "reader", "Avatar": "avatar.png" },
+                  "CanDownload": true,
+                  "Cover": "volume.png",
+                  "CreatedAt": "2026-07-01T00:00:00Z",
+                  "LastUpdatedChapter": "Chapter 12",
+                  "LastUpdatedAt": "2026-08-21T10:00:00+08:00",
+                  "Chapters": null
+                }
+              ]
+            }
+            """;
+        var response = Decode<ComicSeriesInfoResponseDto>(
+            json,
+            "GetComicSeriesInfo");
+
+        Assert.AreEqual(
+            DateTimeOffset.Parse("2025-01-02T03:04:05+08:00"),
+            response.Series.CreatedAt);
+        var classification = response.Series.Extra?.Classification;
+        Assert.IsNotNull(classification);
+        Assert.AreEqual("Kanehito Yamada", classification.Author);
+        Assert.AreEqual(40000L, classification.SubjectId);
+        Assert.AreEqual("葬送的芙莉莲", classification.SeriesNameCn);
+        CollectionAssert.AreEqual(
+            new[] { "奇幻", "冒险" },
+            classification.Tags?.ToArray());
+        Assert.IsNull(response.Books![0].Chapters);
+
+        var api = new SignalRMangaApi(
+            new TypedFakeSignalRConnection<ComicSeriesInfoResponseDto>(response));
+        var result = await api.GetSeriesAsync(
+            "Frieren",
+            ComicOrder.Latest,
+            CancellationToken.None);
+
+        Assert.AreEqual("Kanehito Yamada", result.Author);
+        Assert.AreEqual(
+            DateTimeOffset.Parse("2026-08-21T10:00:00+08:00"),
+            result.LastUpdatedAt);
+        CollectionAssert.AreEqual(
+            new[] { "奇幻", "冒险" },
+            result.Tags.ToArray());
+        Assert.AreEqual(1, result.Volumes.Count);
+        Assert.AreEqual(0, result.Volumes[0].Chapters.Count);
+    }
+
     private static ComicListResponseDto EmptyListResponse()
     {
         return new ComicListResponseDto
@@ -310,6 +427,35 @@ public sealed class SignalRMangaApiTests
             Page = 1,
             TotalPages = 0
         };
+    }
+
+    private static ComicSeriesDto MinimalSeries()
+    {
+        return new ComicSeriesDto
+        {
+            Id = "series",
+            Title = "Title",
+            OriginalTitle = null,
+            Cover = "cover.png",
+            Author = null,
+            Views = 0,
+            Favorite = 0,
+            Introduction = string.Empty,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            LastUpdatedChapter = string.Empty,
+            LastUpdatedAt = DateTimeOffset.UnixEpoch
+        };
+    }
+
+    private static T Decode<T>(string json, string methodName)
+    {
+        var envelope = new HubEnvelope<byte[]>
+        {
+            Success = true,
+            Response = GzipJson.Compress(json)
+        };
+
+        return new CompressedResponseDecoder().Decode<T>(envelope, methodName);
     }
 
     private static Invocation AssertSingleCall<TResponse>(

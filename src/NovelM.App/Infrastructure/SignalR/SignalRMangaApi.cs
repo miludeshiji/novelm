@@ -56,13 +56,13 @@ internal sealed class SignalRMangaApi : IMangaApi
         var author = !string.IsNullOrWhiteSpace(series.Author)
             ? series.Author
             : classification?.Author;
-        var volumes = response.Books
+        var volumes = (response.Books ?? Array.Empty<ComicBookDto>())
             .Select(book => new MangaVolume(
                 book.Id,
                 book.Title,
                 book.Cover,
                 book.Uploader.UserName,
-                book.Chapters
+                (book.Chapters ?? Array.Empty<ComicChapterSummaryDto>())
                     .Select(chapter => new MangaChapterSummary(
                         chapter.Id,
                         chapter.SortNum,
@@ -92,7 +92,7 @@ internal sealed class SignalRMangaApi : IMangaApi
     private static PageResult<MangaListItem> ToPageResult(
         ComicListResponseDto response)
     {
-        var items = response.Data
+        var items = (response.Data ?? Array.Empty<ComicListItemDto>())
             .Select(item => new MangaListItem(
                 item.Title,
                 item.Title,
