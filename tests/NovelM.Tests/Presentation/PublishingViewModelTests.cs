@@ -151,6 +151,61 @@ public sealed class PublishingViewModelTests
     }
 
     [TestMethod]
+    public async Task RefreshAsync_MissingDirtySelection_PreservesEditorDraftAndSelection()
+    {
+        var one = Summary(1);
+        var two = Summary(2);
+        var listCalls = 0;
+        var service = new FakeComicPublishingService
+        {
+            GetMyComicsHandler = (_, _, _, _) => Task.FromResult(
+                ++listCalls == 1 ? Page([one, two], 1, 2) : Page([two], 2, 2)),
+            GetEditDetailsHandler = (bookId, _) => Task.FromResult(
+                ComicEditorViewModelTests.Details() with { Id = bookId })
+        };
+        var viewModel = CreateLoadedViewModel(service);
+        await viewModel.LoadAsync(CancellationToken.None);
+        await viewModel.SelectComicAsync(one, false, CancellationToken.None);
+        viewModel.Editor.Title = "unsaved title";
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(new long[] { 2 }, viewModel.Comics.Select(x => x.Id).ToArray());
+        Assert.AreEqual(2, viewModel.CurrentPage);
+        Assert.AreEqual(2, viewModel.TotalPages);
+        Assert.AreSame(one, viewModel.SelectedComic);
+        Assert.AreEqual(1L, viewModel.Editor.BookId);
+        Assert.AreEqual("unsaved title", viewModel.Editor.Title);
+        Assert.IsTrue(viewModel.Editor.InfoHasUnsavedChanges);
+        StringAssert.Contains(viewModel.NoticeMessage, "未保存");
+    }
+
+    [TestMethod]
+    public async Task RefreshAsync_MissingCleanSelection_ClearsEditorAndSelection()
+    {
+        var one = Summary(1);
+        var two = Summary(2);
+        var listCalls = 0;
+        var service = new FakeComicPublishingService
+        {
+            GetMyComicsHandler = (_, _, _, _) => Task.FromResult(
+                ++listCalls == 1 ? Page([one, two], 1, 1) : Page([two], 1, 1)),
+            GetEditDetailsHandler = (bookId, _) => Task.FromResult(
+                ComicEditorViewModelTests.Details() with { Id = bookId })
+        };
+        var viewModel = CreateLoadedViewModel(service);
+        await viewModel.LoadAsync(CancellationToken.None);
+        await viewModel.SelectComicAsync(one, false, CancellationToken.None);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.IsNull(viewModel.SelectedComic);
+        Assert.IsNull(viewModel.Editor.BookId);
+        Assert.IsFalse(viewModel.Editor.IsLoaded);
+        Assert.IsNull(viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
     public void RequestAccountNavigation_RaisesSingleEvent()
     {
         var viewModel = CreateViewModel(new FakeAuthService(), new FakeComicPublishingService());

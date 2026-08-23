@@ -49,6 +49,29 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task LoadAsync_ClearWhilePending_LateSuccessDoesNotRestoreEditor()
+    {
+        var completion = new TaskCompletionSource<ComicEditDetails>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeComicPublishingService
+        {
+            GetEditDetailsHandler = (_, _) => completion.Task
+        };
+        var viewModel = CreateViewModel(service);
+
+        var load = viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.Clear();
+        completion.SetResult(Details());
+        await load;
+
+        Assert.IsNull(viewModel.BookId);
+        Assert.IsFalse(viewModel.IsLoaded);
+        Assert.AreEqual(string.Empty, viewModel.Title);
+        Assert.AreEqual(0, viewModel.Chapters.Count);
+        Assert.IsNull(viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
     public async Task SaveInfoAsync_SendsCompleteDraftAndClearsOnlyInfoDirty()
     {
         var service = LoadedService();
@@ -105,6 +128,63 @@ public sealed class ComicEditorViewModelTests
         CollectionAssert.AreEqual(new[] { "new-tag" }, service.SettingsDraft.Tags.ToArray());
         Assert.AreEqual(5, service.MaximumInteriorLevel);
         Assert.IsFalse(viewModel.SettingsHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task SaveInfoAsync_EditWhilePending_PreservesLatestDraftAndDirtyState()
+    {
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.UpdateInfoHandler = (_, _, _) => completion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.Title = "submitted title";
+        viewModel.Level = 4;
+
+        var save = viewModel.SaveInfoAsync(CancellationToken.None);
+        viewModel.Title = "latest title";
+        completion.SetResult();
+        await save;
+
+        Assert.AreEqual("submitted title", service.InfoDraft?.Title);
+        Assert.AreEqual("latest title", viewModel.Title);
+        Assert.IsTrue(viewModel.InfoHasUnsavedChanges);
+        Assert.IsTrue(viewModel.SettingsHasUnsavedChanges);
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task SaveSettingsAsync_EditAndTagsWhilePending_PreservesLatestDraftAndDirtyState()
+    {
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.UpdateSettingsHandler = (_, _, _, _) => completion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.SeriesName = "submitted series";
+        viewModel.Tags.Clear();
+        viewModel.Tags.Add("submitted-tag");
+        viewModel.Introduction = "dirty info";
+
+        var save = viewModel.SaveSettingsAsync(CancellationToken.None);
+        viewModel.SeriesName = "latest series";
+        viewModel.Tags.Add("latest-tag");
+        completion.SetResult();
+        await save;
+
+        Assert.AreEqual("submitted series", service.SettingsDraft?.SeriesName);
+        CollectionAssert.AreEqual(
+            new[] { "submitted-tag" },
+            service.SettingsDraft?.Tags.ToArray());
+        Assert.AreEqual("latest series", viewModel.SeriesName);
+        CollectionAssert.AreEqual(
+            new[] { "submitted-tag", "latest-tag" },
+            viewModel.Tags.ToArray());
+        Assert.IsTrue(viewModel.SettingsHasUnsavedChanges);
+        Assert.IsTrue(viewModel.InfoHasUnsavedChanges);
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
     }
 
     [TestMethod]
@@ -184,6 +264,72 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task SaveChapterAsync_EditWhilePending_PreservesLatestDraftAndDirtyState()
+    {
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.GetChapterHandler = (_, _, _) => Task.FromResult(
+            new ComicChapterDraft(70, "One", ["https://i/1.jpg"]));
+        service.UpdateChapterHandler = (_, _, _) => completion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[0], false, CancellationToken.None);
+        viewModel.ChapterTitle = "submitted chapter";
+        viewModel.ChapterImages.Add("https://i/submitted.jpg");
+        viewModel.Title = "dirty info";
+
+        var save = viewModel.SaveChapterAsync(CancellationToken.None);
+        viewModel.ChapterTitle = "latest chapter";
+        viewModel.ChapterImages.Add("https://i/latest.jpg");
+        completion.SetResult();
+        await save;
+
+        Assert.AreEqual("submitted chapter", service.UpdatedChapterDraft?.Title);
+        Assert.AreEqual("submitted chapter", viewModel.SelectedChapter?.Title);
+        Assert.AreEqual("latest chapter", viewModel.ChapterTitle);
+        CollectionAssert.AreEqual(
+            new[] { "https://i/1.jpg", "https://i/submitted.jpg", "https://i/latest.jpg" },
+            viewModel.ChapterImages.ToArray());
+        Assert.IsTrue(viewModel.ChapterHasUnsavedChanges);
+        Assert.IsTrue(viewModel.InfoHasUnsavedChanges);
+        Assert.IsFalse(viewModel.SettingsHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task SaveNewChapterAsync_EditWhilePending_CommitsIdentityAndKeepsLatestDraftDirty()
+    {
+        var completion = new TaskCompletionSource<CreateChapterResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.CreateChapterHandler = (_, _, _, _) => completion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.ChapterTitle = "submitted new chapter";
+        viewModel.ChapterImages.Add("https://i/submitted.jpg");
+
+        var save = viewModel.SaveChapterAsync(CancellationToken.None);
+        viewModel.ChapterTitle = "latest new chapter";
+        viewModel.ChapterImages.Add("https://i/latest.jpg");
+        completion.SetResult(new CreateChapterResult(
+            88,
+            [
+                new ComicChapterSummary(70, 1, "One"),
+                new ComicChapterSummary(88, 2, "submitted new chapter")
+            ]));
+        await save;
+
+        Assert.AreEqual(88L, viewModel.SelectedChapter?.Id);
+        Assert.IsFalse(viewModel.IsCreatingChapter);
+        Assert.AreEqual("latest new chapter", viewModel.ChapterTitle);
+        CollectionAssert.AreEqual(
+            new[] { "https://i/submitted.jpg", "https://i/latest.jpg" },
+            viewModel.ChapterImages.ToArray());
+        Assert.IsTrue(viewModel.ChapterHasUnsavedChanges);
+    }
+
+    [TestMethod]
     public async Task DeleteSelectedChapterAsync_RemovesAndSelectsAdjacentWithRenumberedSorts()
     {
         var service = LoadedService(ThreeChapterDetails());
@@ -222,6 +368,67 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task DeleteSelectedChapterAsync_AdjacentLoadFailure_KeepsCommittedDeleteWithEmptyDraft()
+    {
+        var chapterLoadCalls = 0;
+        var service = LoadedService(ThreeChapterDetails());
+        service.GetChapterHandler = (_, chapterId, _) => ++chapterLoadCalls == 1
+            ? Task.FromResult(
+                new ComicChapterDraft(chapterId, "Deleted chapter", ["https://i/deleted.jpg"]))
+            : Task.FromException<ComicChapterDraft>(
+                new AppException(AppErrorKind.Transport, "unsafe"));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[1], false, CancellationToken.None);
+        viewModel.ChapterTitle = "dirty deleted chapter";
+        viewModel.ChapterImages.Add("https://i/dirty.jpg");
+
+        await viewModel.DeleteSelectedChapterAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new long[] { 70, 72 },
+            viewModel.Chapters.Select(x => x.Id).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 1, 2 },
+            viewModel.Chapters.Select(x => x.SortNum).ToArray());
+        Assert.IsNull(viewModel.SelectedChapter);
+        Assert.AreEqual(string.Empty, viewModel.ChapterTitle);
+        Assert.AreEqual(0, viewModel.ChapterImages.Count);
+        Assert.IsFalse(viewModel.IsCreatingChapter);
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
+        Assert.AreEqual(3, viewModel.NewChapterSortNum);
+        Assert.AreEqual("网络连接失败，请检查网络后重试。", viewModel.ErrorMessage);
+    }
+
+    [TestMethod]
+    public async Task DeleteSelectedChapterAsync_AdjacentLoadCancellation_PropagatesWithCommittedDelete()
+    {
+        using var source = new CancellationTokenSource();
+        var chapterLoadCalls = 0;
+        var service = LoadedService(ThreeChapterDetails());
+        service.GetChapterHandler = (_, chapterId, _) => ++chapterLoadCalls == 1
+            ? Task.FromResult(
+                new ComicChapterDraft(chapterId, "Deleted chapter", ["https://i/deleted.jpg"]))
+            : Task.FromException<ComicChapterDraft>(
+                new OperationCanceledException(source.Token));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[1], false, CancellationToken.None);
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
+            viewModel.DeleteSelectedChapterAsync(source.Token));
+
+        CollectionAssert.AreEqual(
+            new long[] { 70, 72 },
+            viewModel.Chapters.Select(x => x.Id).ToArray());
+        Assert.IsNull(viewModel.SelectedChapter);
+        Assert.AreEqual(string.Empty, viewModel.ChapterTitle);
+        Assert.AreEqual(0, viewModel.ChapterImages.Count);
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
     public async Task MoveSelectedChapterAsync_ReordersLocallyAfterApiSuccess()
     {
         var service = LoadedService(ThreeChapterDetails());
@@ -249,6 +456,7 @@ public sealed class ComicEditorViewModelTests
                 [new FailedImage("2.jpg", "failed") ]));
         var viewModel = CreateViewModel(service);
         await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
 
         await viewModel.UploadChapterImagesAsync(
             [File("3.jpg"), File("1.jpg"), File("2.jpg")],
@@ -279,6 +487,130 @@ public sealed class ComicEditorViewModelTests
         Assert.AreEqual("https://i/cover.jpg", viewModel.Cover);
         Assert.IsTrue(viewModel.InfoHasUnsavedChanges);
         Assert.AreEqual(0, viewModel.FailedUploads.Count);
+    }
+
+    [TestMethod]
+    public async Task UploadCoverAsync_LoadAnotherBookWhilePending_LateSuccessDoesNotChangeNewBook()
+    {
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var detailsA = Details() with { Id = 42, Cover = "https://i/a-cover.jpg" };
+        var detailsB = Details() with { Id = 43, Cover = "https://i/b-cover.jpg", Title = "Book B" };
+        var service = LoadedService();
+        service.GetEditDetailsHandler = (bookId, _) => Task.FromResult(
+            bookId == 42 ? detailsA : detailsB);
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+
+        var upload = viewModel.UploadCoverAsync(File("a-cover.jpg"), CancellationToken.None);
+        await viewModel.LoadAsync(43, Profile(), CancellationToken.None);
+        uploadCompletion.SetResult(new ImageUploadBatchResult(
+            [new UploadedImage("a-cover.jpg", "https://i/uploaded-a.jpg")],
+            []));
+        await upload;
+
+        Assert.AreEqual(43L, viewModel.BookId);
+        Assert.AreEqual("Book B", viewModel.Title);
+        Assert.AreEqual("https://i/b-cover.jpg", viewModel.Cover);
+        Assert.IsFalse(viewModel.InfoHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task UploadCoverAsync_StaleUnauthorizedStillRaisesSessionExpired()
+    {
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var detailsB = Details() with { Id = 43, Cover = "https://i/b-cover.jpg", Title = "Book B" };
+        var service = LoadedService();
+        service.GetEditDetailsHandler = (bookId, _) => Task.FromResult(
+            bookId == 42 ? Details() : detailsB);
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var expired = 0;
+        viewModel.SessionExpired += (_, _) => expired++;
+
+        var upload = viewModel.UploadCoverAsync(File("a-cover.jpg"), CancellationToken.None);
+        await viewModel.LoadAsync(43, Profile(), CancellationToken.None);
+        uploadCompletion.SetException(
+            new AppException(AppErrorKind.Unauthorized, "unsafe"));
+        await upload;
+
+        Assert.AreEqual(1, expired);
+        Assert.AreEqual(43L, viewModel.BookId);
+        Assert.AreEqual("https://i/b-cover.jpg", viewModel.Cover);
+        Assert.IsNull(viewModel.ErrorMessage);
+    }
+
+    [TestMethod]
+    public async Task UploadChapterImagesAsync_SwitchChapterWhilePending_LateSuccessDoesNotChangeNewChapter()
+    {
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService(ThreeChapterDetails());
+        service.GetChapterHandler = (_, chapterId, _) => Task.FromResult(
+            new ComicChapterDraft(chapterId, $"Chapter {chapterId}", [$"https://i/{chapterId}.jpg"]));
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[0], false, CancellationToken.None);
+
+        var upload = viewModel.UploadChapterImagesAsync([File("late.jpg")], CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[1], false, CancellationToken.None);
+        uploadCompletion.SetResult(new ImageUploadBatchResult(
+            [new UploadedImage("late.jpg", "https://i/late.jpg")],
+            []));
+        await upload;
+
+        Assert.AreEqual(71L, viewModel.SelectedChapter?.Id);
+        CollectionAssert.AreEqual(
+            new[] { "https://i/71.jpg" },
+            viewModel.ChapterImages.ToArray());
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task UploadCoverAsync_ClearWhilePending_LateSuccessDoesNotRestoreState()
+    {
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+
+        var upload = viewModel.UploadCoverAsync(File("late.jpg"), CancellationToken.None);
+        viewModel.Clear();
+        uploadCompletion.SetResult(new ImageUploadBatchResult(
+            [new UploadedImage("late.jpg", "https://i/late.jpg")],
+            [new FailedImage("failed.jpg", "failed") ]));
+        await upload;
+
+        Assert.IsNull(viewModel.BookId);
+        Assert.IsFalse(viewModel.IsLoaded);
+        Assert.AreEqual(string.Empty, viewModel.Cover);
+        Assert.AreEqual(0, viewModel.FailedUploads.Count);
+        Assert.IsNull(viewModel.NoticeMessage);
+        Assert.IsFalse(viewModel.InfoHasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_RequiresLoadedBookAndChapterContext()
+    {
+        var service = new FakeComicPublishingService();
+        var viewModel = CreateViewModel(service);
+
+        await viewModel.UploadCoverAsync(File("cover.jpg"), CancellationToken.None);
+
+        Assert.AreEqual(0, service.UploadCalls);
+
+        service.GetEditDetailsHandler = (_, _) => Task.FromResult(Details());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.UploadChapterImagesAsync([File("chapter.jpg")], CancellationToken.None);
+
+        Assert.AreEqual(0, service.UploadCalls);
+        Assert.IsFalse(viewModel.IsUploading);
     }
 
     [TestMethod]
@@ -475,6 +807,7 @@ public sealed class ComicEditorViewModelTests
         };
         var viewModel = CreateViewModel(service);
         await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
 
         var first = viewModel.UploadChapterImagesAsync([File("1.jpg")], CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));

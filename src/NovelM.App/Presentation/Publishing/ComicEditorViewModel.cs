@@ -43,6 +43,8 @@ public sealed class ComicEditorViewModel : ObservableObject
     private bool _chapterHasUnsavedChanges;
     private IReadOnlyList<FailedImage> _failedUploads = Array.Empty<FailedImage>();
     private bool _suppressDirty;
+    private long _bookGeneration;
+    private long _chapterGeneration;
 
     public ComicEditorViewModel(
         IComicPublishingService publishingService,
@@ -337,12 +339,18 @@ public sealed class ComicEditorViewModel : ObservableObject
             return;
         }
 
+        var generation = CurrentBookGeneration;
         StartOperation();
         try
         {
             var details = await _publishingService.GetEditDetailsAsync(
                 bookId,
                 cancellationToken);
+            if (generation != CurrentBookGeneration)
+            {
+                return;
+            }
+
             ApplyDetails(bookId, user, details);
         }
         catch (OperationCanceledException)
@@ -351,7 +359,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, generation == CurrentBookGeneration);
         }
         finally
         {
@@ -361,6 +369,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     public void Clear()
     {
+        AdvanceBookContext();
         WithDirtySuppressed(() =>
         {
             BookId = null;
@@ -398,11 +407,17 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
 
         var draft = new ComicInfoDraft(Cover, Title, Author, Introduction, CategoryId);
+        var generation = CurrentBookGeneration;
         StartOperation();
         try
         {
             await _publishingService.UpdateInfoAsync(bookId, draft, cancellationToken);
-            InfoHasUnsavedChanges = false;
+            if (!IsCurrentBookContext(generation, bookId))
+            {
+                return;
+            }
+
+            InfoHasUnsavedChanges = !CurrentInfoMatches(draft);
             NoticeMessage = "漫画信息已保存。";
         }
         catch (OperationCanceledException)
@@ -411,7 +426,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, IsCurrentBookContext(generation, bookId));
         }
         finally
         {
@@ -435,6 +450,7 @@ public sealed class ComicEditorViewModel : ObservableObject
             SeriesName,
             SeriesNameCn,
             Tags.ToArray());
+        var generation = CurrentBookGeneration;
         StartOperation();
         try
         {
@@ -443,7 +459,12 @@ public sealed class ComicEditorViewModel : ObservableObject
                 draft,
                 MaximumInteriorLevel,
                 cancellationToken);
-            SettingsHasUnsavedChanges = false;
+            if (!IsCurrentBookContext(generation, bookId))
+            {
+                return;
+            }
+
+            SettingsHasUnsavedChanges = !CurrentSettingsMatch(draft);
             NoticeMessage = "漫画设置已保存。";
         }
         catch (OperationCanceledException)
@@ -452,7 +473,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, IsCurrentBookContext(generation, bookId));
         }
         finally
         {
@@ -476,6 +497,10 @@ public sealed class ComicEditorViewModel : ObservableObject
             return false;
         }
 
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
+        var contextChapterId = SelectedChapter?.Id;
+        var contextWasCreating = IsCreatingChapter;
         StartOperation();
         try
         {
@@ -483,6 +508,16 @@ public sealed class ComicEditorViewModel : ObservableObject
                 bookId,
                 chapter.Id,
                 cancellationToken);
+            if (!IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    contextChapterId,
+                    contextWasCreating))
+            {
+                return false;
+            }
+
             ApplyChapterDraft(chapter, draft);
             return true;
         }
@@ -492,7 +527,14 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(
+                exception,
+                IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    contextChapterId,
+                    contextWasCreating));
             return false;
         }
         finally
@@ -514,6 +556,7 @@ public sealed class ComicEditorViewModel : ObservableObject
             return false;
         }
 
+        AdvanceChapterContext();
         WithDirtySuppressed(() =>
         {
             ClearChapterDraft();
@@ -541,17 +584,32 @@ public sealed class ComicEditorViewModel : ObservableObject
 
         var chapterId = IsCreatingChapter ? 0 : selected!.Id;
         var draft = new ComicChapterDraft(chapterId, ChapterTitle, ChapterImages.ToArray());
+        var wasCreating = IsCreatingChapter;
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
         StartOperation();
         try
         {
-            if (IsCreatingChapter)
+            var draftUnchanged = false;
+            if (wasCreating)
             {
                 var result = await _publishingService.CreateChapterAsync(
                     bookId,
                     NewChapterSortNum,
                     draft,
                     cancellationToken);
-                ApplyCreatedChapter(result, draft);
+                if (!IsCurrentChapterContext(
+                        bookGeneration,
+                        bookId,
+                        chapterGeneration,
+                        selectedChapterId: null,
+                        wasCreating: true))
+                {
+                    return;
+                }
+
+                draftUnchanged = CurrentNewChapterMatches(draft);
+                ApplyCreatedChapter(result, draft, preserveCurrentDraft: !draftUnchanged);
             }
             else
             {
@@ -559,10 +617,21 @@ public sealed class ComicEditorViewModel : ObservableObject
                     selected!.Id,
                     draft,
                     cancellationToken);
+                if (!IsCurrentChapterContext(
+                        bookGeneration,
+                        bookId,
+                        chapterGeneration,
+                        selected.Id,
+                        wasCreating: false))
+                {
+                    return;
+                }
+
+                draftUnchanged = CurrentChapterMatches(selected.Id, draft);
                 ApplyUpdatedChapter(selected, draft);
             }
 
-            ChapterHasUnsavedChanges = false;
+            ChapterHasUnsavedChanges = !draftUnchanged;
             NoticeMessage = "章节已保存。";
         }
         catch (OperationCanceledException)
@@ -571,7 +640,14 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(
+                exception,
+                IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selected?.Id,
+                    wasCreating));
         }
         finally
         {
@@ -592,6 +668,8 @@ public sealed class ComicEditorViewModel : ObservableObject
             return;
         }
 
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
         StartOperation();
         try
         {
@@ -599,17 +677,28 @@ public sealed class ComicEditorViewModel : ObservableObject
                 bookId,
                 selected.SortNum,
                 cancellationToken);
+            if (!IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selected.Id,
+                    wasCreating: false))
+            {
+                return;
+            }
+
             Chapters.RemoveAt(originalIndex);
             RenumberChapters();
+            AdvanceChapterContext();
+            WithDirtySuppressed(() =>
+            {
+                ClearChapterDraft();
+                NewChapterSortNum = Chapters.Count + 1;
+            });
+            ChapterHasUnsavedChanges = false;
 
             if (Chapters.Count == 0)
             {
-                WithDirtySuppressed(() =>
-                {
-                    ClearChapterDraft();
-                    NewChapterSortNum = 1;
-                });
-                ChapterHasUnsavedChanges = false;
                 return;
             }
 
@@ -623,7 +712,9 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(
+                exception,
+                IsCurrentBookContext(bookGeneration, bookId));
         }
         finally
         {
@@ -652,6 +743,8 @@ public sealed class ComicEditorViewModel : ObservableObject
 
         var oldSortNum = selected.SortNum;
         var newSortNum = Chapters[newIndex].SortNum;
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
         StartOperation();
         try
         {
@@ -660,6 +753,16 @@ public sealed class ComicEditorViewModel : ObservableObject
                 oldSortNum,
                 newSortNum,
                 cancellationToken);
+            if (!IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selected.Id,
+                    wasCreating: false))
+            {
+                return;
+            }
+
             Chapters.Move(oldIndex, newIndex);
             RenumberChapters();
             SelectedChapter = Chapters[newIndex];
@@ -670,7 +773,14 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(
+                exception,
+                IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selected.Id,
+                    wasCreating: false));
         }
         finally
         {
@@ -682,8 +792,25 @@ public sealed class ComicEditorViewModel : ObservableObject
         IReadOnlyList<LocalImageFile> files,
         CancellationToken cancellationToken)
     {
+        if (!IsLoaded
+            || BookId is not long bookId
+            || (SelectedChapter is null && !IsCreatingChapter))
+        {
+            return Task.CompletedTask;
+        }
+
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
+        var selectedChapterId = SelectedChapter?.Id;
+        var wasCreating = IsCreatingChapter;
         return UploadAsync(
             files,
+            () => IsCurrentChapterContext(
+                bookGeneration,
+                bookId,
+                chapterGeneration,
+                selectedChapterId,
+                wasCreating),
             result =>
             {
                 foreach (var uploaded in result.Successes)
@@ -698,8 +825,15 @@ public sealed class ComicEditorViewModel : ObservableObject
         LocalImageFile file,
         CancellationToken cancellationToken)
     {
+        if (!IsLoaded || BookId is not long bookId)
+        {
+            return Task.CompletedTask;
+        }
+
+        var generation = CurrentBookGeneration;
         return UploadAsync(
             [file],
+            () => IsCurrentBookContext(generation, bookId),
             result =>
             {
                 if (result.Successes.Count > 0)
@@ -740,6 +874,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     private async Task UploadAsync(
         IReadOnlyList<LocalImageFile> files,
+        Func<bool> isContextCurrent,
         Action<ImageUploadBatchResult> applySuccesses,
         CancellationToken cancellationToken)
     {
@@ -755,6 +890,11 @@ public sealed class ComicEditorViewModel : ObservableObject
         try
         {
             var result = await _publishingService.UploadImagesAsync(files, cancellationToken);
+            if (!isContextCurrent())
+            {
+                return;
+            }
+
             applySuccesses(result);
             FailedUploads = result.Failures;
             if (result.Failures.Count > 0)
@@ -768,7 +908,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, isContextCurrent());
         }
         finally
         {
@@ -778,6 +918,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     private void ApplyDetails(long bookId, UserProfile user, ComicEditDetails details)
     {
+        AdvanceBookContext();
         WithDirtySuppressed(() =>
         {
             BookId = bookId;
@@ -809,6 +950,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         ComicChapterSummary chapter,
         ComicChapterDraft draft)
     {
+        AdvanceChapterContext();
         WithDirtySuppressed(() =>
         {
             SelectedChapter = chapter;
@@ -822,7 +964,8 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     private void ApplyCreatedChapter(
         CreateChapterResult result,
-        ComicChapterDraft draft)
+        ComicChapterDraft draft,
+        bool preserveCurrentDraft)
     {
         var chapters = result.Chapters.OrderBy(x => x.SortNum).ToList();
         var created = chapters.FirstOrDefault(x => x.Id == result.NewChapterId);
@@ -835,13 +978,18 @@ public sealed class ComicEditorViewModel : ObservableObject
             chapters.Add(created);
         }
 
+        AdvanceChapterContext();
         WithDirtySuppressed(() =>
         {
             ReplaceCollection(Chapters, chapters.OrderBy(x => x.SortNum));
             RenumberChapters();
             SelectedChapter = Chapters.First(x => x.Id == result.NewChapterId);
-            ChapterTitle = draft.Title;
-            ReplaceCollection(ChapterImages, draft.Images);
+            if (!preserveCurrentDraft)
+            {
+                ChapterTitle = draft.Title;
+                ReplaceCollection(ChapterImages, draft.Images);
+            }
+
             IsCreatingChapter = false;
             NewChapterSortNum = Chapters.Count + 1;
         });
@@ -860,6 +1008,43 @@ public sealed class ComicEditorViewModel : ObservableObject
         var updated = selected with { Title = draft.Title };
         Chapters[index] = updated;
         SelectedChapter = updated;
+    }
+
+    private bool CurrentInfoMatches(ComicInfoDraft draft)
+    {
+        return Cover == draft.Cover
+            && Title == draft.Title
+            && Author == draft.Author
+            && Introduction == draft.Introduction
+            && CategoryId == draft.CategoryId;
+    }
+
+    private bool CurrentSettingsMatch(ComicSettingsDraft draft)
+    {
+        return Level == draft.Level
+            && InteriorLevel == draft.InteriorLevel
+            && DownloadAllowed == draft.DownloadAllowed
+            && SubjectId == draft.SubjectId
+            && SeriesId == draft.SeriesId
+            && SeriesName == draft.SeriesName
+            && SeriesNameCn == draft.SeriesNameCn
+            && Tags.SequenceEqual(draft.Tags);
+    }
+
+    private bool CurrentNewChapterMatches(ComicChapterDraft draft)
+    {
+        return IsCreatingChapter
+            && SelectedChapter is null
+            && ChapterTitle == draft.Title
+            && ChapterImages.SequenceEqual(draft.Images);
+    }
+
+    private bool CurrentChapterMatches(long chapterId, ComicChapterDraft draft)
+    {
+        return !IsCreatingChapter
+            && SelectedChapter?.Id == chapterId
+            && ChapterTitle == draft.Title
+            && ChapterImages.SequenceEqual(draft.Images);
     }
 
     private void ClearChapterDraft()
@@ -902,13 +1087,58 @@ public sealed class ComicEditorViewModel : ObservableObject
         NoticeMessage = null;
     }
 
-    private void HandleFailure(Exception exception)
+    private void HandleFailure(Exception exception, bool isContextCurrent)
     {
-        ErrorMessage = _errorMessageMapper.Map(exception);
         if (exception is AppException { Kind: AppErrorKind.Unauthorized })
         {
+            if (isContextCurrent)
+            {
+                ErrorMessage = _errorMessageMapper.Map(exception);
+            }
+
             SessionExpired?.Invoke(this, EventArgs.Empty);
+            return;
         }
+
+        if (isContextCurrent)
+        {
+            ErrorMessage = _errorMessageMapper.Map(exception);
+        }
+    }
+
+    private long CurrentBookGeneration => Volatile.Read(ref _bookGeneration);
+
+    private long CurrentChapterGeneration => Volatile.Read(ref _chapterGeneration);
+
+    private void AdvanceBookContext()
+    {
+        Interlocked.Increment(ref _bookGeneration);
+        Interlocked.Increment(ref _chapterGeneration);
+    }
+
+    private void AdvanceChapterContext()
+    {
+        Interlocked.Increment(ref _chapterGeneration);
+    }
+
+    private bool IsCurrentBookContext(long generation, long bookId)
+    {
+        return generation == CurrentBookGeneration
+            && IsLoaded
+            && BookId == bookId;
+    }
+
+    private bool IsCurrentChapterContext(
+        long bookGeneration,
+        long bookId,
+        long chapterGeneration,
+        long? selectedChapterId,
+        bool wasCreating)
+    {
+        return IsCurrentBookContext(bookGeneration, bookId)
+            && chapterGeneration == CurrentChapterGeneration
+            && IsCreatingChapter == wasCreating
+            && SelectedChapter?.Id == selectedChapterId;
     }
 
     private void MarkInfoDirty()

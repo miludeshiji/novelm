@@ -379,6 +379,10 @@ public sealed class PublishingViewModel : ObservableObject
                 {
                     SelectedComic = refreshedSelection;
                 }
+                else if (Editor.HasUnsavedChanges)
+                {
+                    NoticeMessage = "当前漫画含有未保存的修改，已保留编辑草稿。";
+                }
                 else
                 {
                     SelectedComic = null;
