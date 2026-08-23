@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Auth;
@@ -941,9 +942,12 @@ public sealed class ComicEditorViewModel : ObservableObject
         ChapterHasUnsavedChanges = value;
     }
 
-    private void SetDirtyProperty(ref bool field, bool value)
+    private void SetDirtyProperty(
+        ref bool field,
+        bool value,
+        [CallerMemberName] string? propertyName = null)
     {
-        if (SetProperty(ref field, value))
+        if (SetProperty(ref field, value, propertyName))
         {
             OnPropertyChanged(nameof(HasUnsavedChanges));
         }

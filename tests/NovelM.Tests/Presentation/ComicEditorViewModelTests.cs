@@ -336,6 +336,76 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task InfoDirtyTransition_RaisesBindableSectionAndAggregateNotifications()
+    {
+        var service = LoadedService();
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var notifications = new List<(string? Name, bool SectionDirty, bool HasDirty)>();
+        viewModel.PropertyChanged += (_, args) => notifications.Add(
+            (args.PropertyName, viewModel.InfoHasUnsavedChanges, viewModel.HasUnsavedChanges));
+
+        viewModel.Title = "changed";
+
+        Assert.IsTrue(notifications.Any(item =>
+            item.Name == nameof(ComicEditorViewModel.InfoHasUnsavedChanges)
+            && item.SectionDirty));
+        Assert.IsTrue(notifications.Any(item =>
+            item.Name == nameof(ComicEditorViewModel.HasUnsavedChanges)
+            && item.HasDirty));
+        Assert.IsFalse(notifications.Any(item => item.Name == "SetDirtyProperty"));
+
+        notifications.Clear();
+        await viewModel.SaveInfoAsync(CancellationToken.None);
+
+        Assert.IsTrue(notifications.Any(item =>
+            item.Name == nameof(ComicEditorViewModel.InfoHasUnsavedChanges)
+            && !item.SectionDirty));
+        Assert.IsTrue(notifications.Any(item =>
+            item.Name == nameof(ComicEditorViewModel.HasUnsavedChanges)
+            && !item.HasDirty));
+        Assert.IsFalse(notifications.Any(item => item.Name == "SetDirtyProperty"));
+    }
+
+    [TestMethod]
+    public async Task SettingsDirtyTransition_RaisesBindableSectionAndAggregateNotifications()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.Level++;
+
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.SettingsHasUnsavedChanges));
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.HasUnsavedChanges));
+        CollectionAssert.DoesNotContain(changedProperties, "SetDirtyProperty");
+    }
+
+    [TestMethod]
+    public async Task ChapterDirtyTransition_RaisesBindableSectionAndAggregateNotifications()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.ChapterImages.Add("https://i/new.jpg");
+
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.ChapterHasUnsavedChanges));
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.HasUnsavedChanges));
+        CollectionAssert.DoesNotContain(changedProperties, "SetDirtyProperty");
+    }
+
+    [TestMethod]
     public async Task WriteFailure_PreservesDraftDirtyAndReportsError()
     {
         var service = LoadedService();
