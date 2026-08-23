@@ -29,7 +29,8 @@ internal sealed class ComicPublishingListItemDto
 
 internal sealed class ComicPublishingListResponseDto
 {
-    public IReadOnlyList<ComicPublishingListItemDto?>? Data { get; init; }
+    [JsonRequired]
+    public required IReadOnlyList<ComicPublishingListItemDto?> Data { get; init; }
 
     [JsonRequired]
     public required int Page { get; init; }

@@ -415,6 +415,19 @@ public sealed class SignalRComicPublishingApiTests
     }
 
     [TestMethod]
+    [DataRow("""{"Page":1,"TotalPages":1}""")]
+    [DataRow("""{"Data":null,"Page":1,"TotalPages":1}""")]
+    public void DecodeMyBooksResponse_MissingOrNullDataThrowsProtocolError(
+        string json)
+    {
+        var exception = Assert.ThrowsExactly<AppException>(() =>
+            Decode<ComicPublishingListResponseDto>(json, "GetMyBooks"));
+
+        Assert.AreEqual(AppErrorKind.Protocol, exception.Kind);
+        StringAssert.Contains(exception.Message, "GetMyBooks");
+    }
+
+    [TestMethod]
     public async Task DecodeBookEditResponse_RealGzipMapsSnakeCaseAndNullableFields()
     {
         var response = Decode<ComicBookEditResponseDto>(
@@ -503,10 +516,13 @@ public sealed class SignalRComicPublishingApiTests
     }
 
     [TestMethod]
-    public async Task DecodeComicEditResponse_NullImagesMapsEmpty()
+    [DataRow("""{"Title":"Chapter"}""")]
+    [DataRow("""{"Title":"Chapter","Images":null}""")]
+    public async Task DecodeComicEditResponse_MissingOrNullImagesMapsEmpty(
+        string json)
     {
         var response = Decode<ComicChapterEditResponseDto>(
-            """{"Title":"Chapter","Images":null}""",
+            json,
             "GetComicEditInfo");
         var api = new SignalRComicPublishingApi(
             new RecordingSignalRConnection(response));
@@ -517,6 +533,38 @@ public sealed class SignalRComicPublishingApiTests
             CancellationToken.None);
 
         Assert.AreEqual(0, result.Images.Count);
+    }
+
+    [TestMethod]
+    [DataRow("CategoriesOmitted")]
+    [DataRow("ChaptersNull")]
+    [DataRow("CreatedChaptersOmitted")]
+    public void DecodeRequiredPublishingCollection_MissingOrNullThrowsProtocolError(
+        string scenario)
+    {
+        Action action = scenario switch
+        {
+            "CategoriesOmitted" => () => Decode<ComicBookEditResponseDto>(
+                EditResponseJson(categoriesProperty: string.Empty),
+                "GetBookEditInfo"),
+            "ChaptersNull" => () => Decode<ComicBookEditResponseDto>(
+                EditResponseJson(chaptersProperty: ""","Chapters":null"""),
+                "GetBookEditInfo"),
+            "CreatedChaptersOmitted" => () => Decode<ComicChapterCreateResponseDto>(
+                """{"NewCid":701}""",
+                "CreateNewComicChapter"),
+            _ => throw new AssertFailedException(
+                $"Unexpected scenario '{scenario}'.")
+        };
+
+        var exception = Assert.ThrowsExactly<AppException>(action);
+
+        Assert.AreEqual(AppErrorKind.Protocol, exception.Kind);
+        StringAssert.Contains(
+            exception.Message,
+            scenario == "CreatedChaptersOmitted"
+                ? "CreateNewComicChapter"
+                : "GetBookEditInfo");
     }
 
     [TestMethod]
@@ -540,25 +588,12 @@ public sealed class SignalRComicPublishingApiTests
     {
         return field switch
         {
-            "Data" => () => new SignalRComicPublishingApi(
-                    new RecordingSignalRConnection(
-                        new ComicPublishingListResponseDto
-                        {
-                            Data = new ComicPublishingListItemDto?[] { null },
-                            Page = 1,
-                            TotalPages = 1
-                        }))
-                .GetMyBooksAsync(1, 24, string.Empty, CancellationToken.None),
-            "Categories" => () => new SignalRComicPublishingApi(
-                    new RecordingSignalRConnection(
-                        FullEditResponse(
-                            categories: new ComicPublishingCategoryDto?[] { null })))
-                .GetBookEditInfoAsync(77, CancellationToken.None),
-            "Chapters" => () => new SignalRComicPublishingApi(
-                    new RecordingSignalRConnection(
-                        FullEditResponse(
-                            chapters: new ComicPublishingChapterDto?[] { null })))
-                .GetBookEditInfoAsync(77, CancellationToken.None),
+            "Data" => () => InvokeDecodedMyBooksResponse(
+                """{"Data":[null],"Page":1,"TotalPages":1}"""),
+            "Categories" => () => InvokeDecodedEditResponse(
+                EditResponseJson(categoriesProperty: ""","Categories":[null]""")),
+            "Chapters" => () => InvokeDecodedEditResponse(
+                EditResponseJson(chaptersProperty: ""","Chapters":[null]""")),
             "Tags" => () => new SignalRComicPublishingApi(
                     new RecordingSignalRConnection(
                         FullEditResponse(tags: new string?[] { null })))
@@ -571,20 +606,64 @@ public sealed class SignalRComicPublishingApiTests
                             Images = new string?[] { null }
                         }))
                 .GetComicEditInfoAsync(77, 701, CancellationToken.None),
-            "CreatedChapters" => () => new SignalRComicPublishingApi(
-                    new RecordingSignalRConnection(
-                        new ComicChapterCreateResponseDto
-                        {
-                            Chapters = new ComicPublishingChapterDto?[] { null },
-                            NewCid = 701
-                        }))
-                .CreateNewComicChapterAsync(
-                    77,
-                    1,
-                    new ComicChapterDraft(0, "Chapter", ["1.png"]),
-                    CancellationToken.None),
+            "CreatedChapters" => () => InvokeDecodedCreateChapterResponse(
+                """{"Chapters":[null],"NewCid":701}"""),
             _ => throw new AssertFailedException($"Unexpected field '{field}'.")
         };
+    }
+
+    private static Task InvokeDecodedMyBooksResponse(string json)
+    {
+        var response = Decode<ComicPublishingListResponseDto>(json, "GetMyBooks");
+        return new SignalRComicPublishingApi(
+                new RecordingSignalRConnection(response))
+            .GetMyBooksAsync(1, 24, string.Empty, CancellationToken.None);
+    }
+
+    private static Task InvokeDecodedEditResponse(string json)
+    {
+        var response = Decode<ComicBookEditResponseDto>(json, "GetBookEditInfo");
+        return new SignalRComicPublishingApi(
+                new RecordingSignalRConnection(response))
+            .GetBookEditInfoAsync(77, CancellationToken.None);
+    }
+
+    private static Task InvokeDecodedCreateChapterResponse(string json)
+    {
+        var response = Decode<ComicChapterCreateResponseDto>(
+            json,
+            "CreateNewComicChapter");
+        return new SignalRComicPublishingApi(
+                new RecordingSignalRConnection(response))
+            .CreateNewComicChapterAsync(
+                77,
+                1,
+                new ComicChapterDraft(0, "Chapter", ["1.png"]),
+                CancellationToken.None);
+    }
+
+    private static string EditResponseJson(
+        string chaptersProperty = ""","Chapters":[]""",
+        string categoriesProperty = ""","Categories":[]""")
+    {
+        return $$"""
+            {
+              "Book": {
+                "Id": 77,
+                "Type": "Comic",
+                "Cover": "cover.png",
+                "Title": "Title",
+                "Author": null,
+                "Introduction": "Introduction",
+                "CategoryId": 8,
+                "Level": 3,
+                "InteriorLevel": 2,
+                "DownloadAllowed": true
+                {{chaptersProperty}}
+              }
+              {{categoriesProperty}}
+            }
+            """;
     }
 
     private static string ExpectedMethodName(string field)
