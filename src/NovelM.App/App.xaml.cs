@@ -1,38 +1,145 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
+using NovelM_App.Application.Abstractions;
+using NovelM_App.Application.Auth;
+using NovelM_App.Application.Books;
+using NovelM_App.Infrastructure.Configuration;
+using NovelM_App.Infrastructure.Http;
+using NovelM_App.Infrastructure.SignalR;
+using NovelM_App.Infrastructure.Storage;
+using NovelM_App.Presentation.Account;
+using NovelM_App.Presentation.BookProbe;
+using NovelM_App.Presentation.Common;
+using NovelM_App.Presentation.Settings;
+using NovelM_App.Presentation.Shell;
 
 namespace NovelM_App;
 
-/// <summary>
-/// Provides application-specific behavior to supplement the default Application class.
-/// </summary>
 public partial class App : Microsoft.UI.Xaml.Application
 {
     private Window? _window;
 
-    /// <summary>
-    /// Initializes the singleton application object.  This is the first line of authored code
-    /// executed, and as such is the logical equivalent of main() or WinMain().
-    /// </summary>
     public App()
     {
         InitializeComponent();
+        Services = BuildServices();
     }
 
-    /// <summary>
-    /// Invoked when the application is launched.
-    /// </summary>
-    /// <param name="args">Details about the launch request and process.</param>
-    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    public static IServiceProvider Services { get; private set; } = null!;
+
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
+        var paths = Services.GetRequiredService<AppPaths>();
+        var startupStage = "准备数据目录";
+
+        try
+        {
+            await paths.EnsureWritableAsync(CancellationToken.None);
+            startupStage = "创建设备标识";
+            await Services
+                .GetRequiredService<DeviceIdStore>()
+                .GetOrCreateAsync(CancellationToken.None);
+            startupStage = "加载节点设置";
+            await Services
+                .GetRequiredService<IApiServerManager>()
+                .LoadAsync(CancellationToken.None);
+
+            startupStage = "创建主窗口";
+            _window = Services.GetRequiredService<MainWindow>();
+            startupStage = "激活主窗口";
+            _window.Activate();
+
+            _ = Services
+                .GetRequiredService<AccountViewModel>()
+                .RestoreAsync(CancellationToken.None);
+        }
+        catch
+        {
+            await ShowStartupFailureAsync(
+                paths.DataDirectory,
+                startupStage);
+        }
+    }
+
+    private static IServiceProvider BuildServices()
+    {
+        var services = new ServiceCollection();
+        var paths = AppPaths.ForRuntime();
+
+        services.AddSingleton(paths);
+        services.AddSingleton<DeviceIdStore>();
+        services.AddSingleton<IApiServerManager>(provider =>
+        {
+            var appPaths = provider.GetRequiredService<AppPaths>();
+#if DEBUG
+            return new ApiServerManager(appPaths, includeLocalhost: true);
+#else
+            return new ApiServerManager(appPaths, includeLocalhost: false);
+#endif
+        });
+
+        services.AddSingleton(new HttpClient());
+        services.AddSingleton<ApiHttpClient>();
+        services.AddSingleton<IAuthApi, AuthApi>();
+        services.AddSingleton<ITokenStore, DpapiTokenStore>();
+        services.AddSingleton<IAuthSession, AuthSession>();
+        services.AddSingleton<CompressedResponseDecoder>();
+        services.AddSingleton<SignalRRetryPolicy>();
+        services.AddSingleton<ISignalRConnection, SignalRConnection>();
+        services.AddSingleton<IUserApi, SignalRUserApi>();
+        services.AddSingleton<IBookApi, SignalRBookApi>();
+        services.AddSingleton<IAuthService, AuthService>();
+        services.AddSingleton<IBookService, BookService>();
+
+        services.AddSingleton<ErrorMessageMapper>();
+        services.AddSingleton<ShellViewModel>();
+        services.AddSingleton<AccountViewModel>();
+        services.AddSingleton<BookProbeViewModel>();
+        services.AddSingleton(provider => new SettingsViewModel(
+            provider.GetRequiredService<IApiServerManager>(),
+            provider.GetRequiredService<IAuthSession>(),
+            provider.GetRequiredService<ISignalRConnection>(),
+            provider.GetRequiredService<ErrorMessageMapper>(),
+            provider.GetRequiredService<AppPaths>().DataDirectory));
+
+        services.AddTransient<AccountPage>();
+        services.AddTransient<BookProbePage>();
+        services.AddTransient<SettingsPage>();
+        services.AddSingleton<MainWindow>();
+
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+    }
+
+    private async Task ShowStartupFailureAsync(
+        string dataDirectory,
+        string startupStage)
+    {
+        var root = new Grid();
+        var loaded = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        root.Loaded += (_, _) => loaded.TrySetResult();
+
+        _window = new Window
+        {
+            Title = "轻书架",
+            Content = root
+        };
         _window.Activate();
+        await loaded.Task;
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = root.XamlRoot,
+            Title = "无法启动轻书架",
+            Content = $"启动阶段：{startupStage}\n应用数据目录：\n{dataDirectory}",
+            CloseButtonText = "关闭"
+        };
+        await dialog.ShowAsync();
+        _window.Close();
     }
 }

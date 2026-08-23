@@ -38,4 +38,19 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
   </ItemGroup>
+
+  <Target Name="CopyWinUIResourcesToPublishDirectory" AfterTargets="Publish">
+    <ItemGroup>
+      <WinUIXbf Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="$(TargetDir)$(AssemblyName).pri"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+    <Copy
+      SourceFiles="@(WinUIXbf)"
+      DestinationFiles="@(WinUIXbf->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
 </Project>

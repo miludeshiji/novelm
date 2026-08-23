@@ -31,7 +31,7 @@ internal sealed class DeviceIdStore
     {
         try
         {
-            var json = await File.ReadAllBytesAsync(_paths.DeviceFile, cancellationToken);
+            var json = await ReadAllBytesAsync(cancellationToken);
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
             var properties = root.ValueKind == JsonValueKind.Object
@@ -60,6 +60,27 @@ internal sealed class DeviceIdStore
         catch (Exception exception) when (IsStorageOrJsonFailure(exception))
         {
             throw StorageError("The device identity could not be read", exception);
+        }
+    }
+
+    private async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken)
+    {
+        const int maximumAttempts = 5;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(
+                    _paths.DeviceFile,
+                    cancellationToken);
+            }
+            catch (IOException exception) when (
+                attempt < maximumAttempts
+                && IsSharingViolation(exception))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+            }
         }
     }
 
@@ -160,6 +181,12 @@ internal sealed class DeviceIdStore
             or UnauthorizedAccessException
             or System.Security.SecurityException
             or NotSupportedException;
+    }
+
+    private static bool IsSharingViolation(IOException exception)
+    {
+        var errorCode = exception.HResult & 0xFFFF;
+        return errorCode is 32 or 33;
     }
 
     private sealed record DeviceDocument(string Id);

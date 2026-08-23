@@ -35,6 +35,25 @@ public sealed class SettingsViewModelTests
     }
 
     [TestMethod]
+    public async Task SelectServerCommand_CurrentServer_HasNoSideEffects()
+    {
+        var operations = new List<string>();
+        var current = Server("hong-kong", "香港节点");
+        var manager = new FakeServerManager(current, new[] { current }, operations);
+        var viewModel = CreateViewModel(
+            manager,
+            new FakeAuthSession(operations),
+            new FakeSignalRConnection(operations));
+
+        await viewModel.SelectServerCommand.ExecuteAsync(current);
+
+        CollectionAssert.AreEqual(Array.Empty<string>(), operations.ToArray());
+        Assert.AreSame(current, viewModel.SelectedServer);
+        Assert.IsNull(viewModel.ErrorMessage);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
     public async Task SelectServerCommand_RestartFails_KeepsSelectionAndShowsFailure()
     {
         var operations = new List<string>();

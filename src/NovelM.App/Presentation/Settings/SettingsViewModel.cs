@@ -53,6 +53,15 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
 
+        if (string.Equals(
+            server.Id,
+            _serverManager.Current.Id,
+            StringComparison.Ordinal))
+        {
+            SelectedServer = _serverManager.Current;
+            return;
+        }
+
         IsBusy = true;
         ErrorMessage = null;
         SelectedServer = server;

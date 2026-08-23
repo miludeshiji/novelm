@@ -26,6 +26,8 @@ public partial class AccountViewModel : ObservableObject
     public partial string? ErrorMessage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSignedIn))]
+    [NotifyPropertyChangedFor(nameof(IsSignedOut))]
     public partial UserProfile? CurrentUser { get; set; }
 
     public AccountViewModel(
@@ -39,6 +41,10 @@ public partial class AccountViewModel : ObservableObject
     }
 
     public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
+
+    public bool IsSignedIn => CurrentUser is not null;
+
+    public bool IsSignedOut => CurrentUser is null;
 
     public async Task RestoreAsync(CancellationToken cancellationToken)
     {
