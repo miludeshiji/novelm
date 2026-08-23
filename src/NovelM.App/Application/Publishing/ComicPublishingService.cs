@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Common;
@@ -175,6 +174,11 @@ public sealed class ComicPublishingService : IComicPublishingService
         CancellationToken cancellationToken)
     {
         ValidatePositiveId(chapterId, "Chapter id");
+        if (draft.Images.Count == 0)
+        {
+            throw Validation("A comic chapter must contain at least one image.");
+        }
+
         var normalizedDraft = NormalizeChapterDraft(draft);
         return _publishingApi.UpdateComicChapterAsync(
             chapterId,
@@ -240,11 +244,7 @@ public sealed class ComicPublishingService : IComicPublishingService
         cancellationToken.ThrowIfCancellationRequested();
 
         var sortedFiles = files
-            .Select((file, index) => new IndexedFile(
-                new LocalImageFile(
-                    NormalizeOptionalText(file.FileName),
-                    file.Content),
-                index))
+            .Select((file, index) => new IndexedFile(file, index))
             .OrderBy(item => item.File.FileName, FileNameComparer)
             .ThenBy(item => item.OriginalIndex)
             .Select(item => item.File)
@@ -420,16 +420,10 @@ public sealed class ComicPublishingService : IComicPublishingService
                 var rightPart = rightParts[index].Value;
                 int comparison;
 
-                if (char.IsDigit(leftPart[0]) && char.IsDigit(rightPart[0]))
+                if (long.TryParse(leftPart, out var leftNumber) &&
+                    long.TryParse(rightPart, out var rightNumber))
                 {
-                    comparison = long.Parse(
-                            leftPart,
-                            NumberStyles.None,
-                            CultureInfo.InvariantCulture)
-                        .CompareTo(long.Parse(
-                            rightPart,
-                            NumberStyles.None,
-                            CultureInfo.InvariantCulture));
+                    comparison = leftNumber.CompareTo(rightNumber);
                 }
                 else
                 {

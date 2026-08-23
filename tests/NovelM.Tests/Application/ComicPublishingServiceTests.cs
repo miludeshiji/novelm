@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Application.Publishing;
 using NovelM_App.Domain.Common;
@@ -159,6 +160,21 @@ public sealed class ComicPublishingServiceTests
     }
 
     [TestMethod]
+    public async Task UpdateChapterAsync_WithoutImages_ThrowsValidation()
+    {
+        var api = new FakeComicPublishingApi();
+        var service = new ComicPublishingService(api);
+        var draft = new ComicChapterDraft(70, "Chapter", []);
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            service.UpdateChapterAsync(70, draft, CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Validation, exception.Kind);
+        Assert.AreEqual(0, api.UpdateChapterCallCount);
+        Assert.AreEqual(0, api.TotalCallCount);
+    }
+
+    [TestMethod]
     public async Task UploadImagesAsync_UsesNaturalOrderAndAtMostThreeWorkers()
     {
         var api = new FakeComicPublishingApi();
@@ -191,6 +207,44 @@ public sealed class ComicPublishingServiceTests
         Assert.AreEqual(0, result.Failures.Count);
         Assert.IsLessThanOrEqualTo(3, maximumConcurrency);
         Assert.AreEqual(3, maximumConcurrency);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_OversizedNumericPart_DoesNotOverflow()
+    {
+        const string oversizedFileName = "999999999999999999999.png";
+        var api = new FakeComicPublishingApi();
+        var service = new ComicPublishingService(api);
+
+        var result = await service.UploadImagesAsync(
+            [File(oversizedFileName), File("2.png")],
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "2.png", oversizedFileName },
+            result.Successes.Select(item => item.FileName).ToArray());
+        Assert.AreEqual(0, result.Failures.Count);
+        Assert.AreEqual(2, api.UploadCallCount);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_PreservesFileNameWhitespace()
+    {
+        const string fileName = " 2.png ";
+        var api = new FakeComicPublishingApi();
+        var service = new ComicPublishingService(api);
+
+        var result = await service.UploadImagesAsync(
+            [File(fileName)],
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { fileName },
+            api.UploadedFileNames.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { fileName },
+            result.Successes.Select(item => item.FileName).ToArray());
+        Assert.AreEqual(0, result.Failures.Count);
     }
 
     [TestMethod]
@@ -575,6 +629,8 @@ public sealed class ComicPublishingServiceTests
 
         public int UploadCallCount => Volatile.Read(ref _uploadCallCount);
 
+        public ConcurrentQueue<string> UploadedFileNames { get; } = new();
+
         public int TotalCallCount =>
             GetMyBooksCallCount +
             QuickCreateCallCount +
@@ -752,6 +808,7 @@ public sealed class ComicPublishingServiceTests
             CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _uploadCallCount);
+            UploadedFileNames.Enqueue(file.FileName);
             CancellationToken = cancellationToken;
             return UploadHandler(file, cancellationToken);
         }
