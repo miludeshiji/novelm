@@ -296,7 +296,7 @@ public sealed class ComicPublishingService : IComicPublishingService
                     cancellationToken);
                 successes[index] = new UploadedImage(file.FileName, url);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
                 throw;
             }
@@ -314,11 +314,21 @@ public sealed class ComicPublishingService : IComicPublishingService
     }
 
     private static ComicChapterDraft NormalizeChapterDraft(
-        ComicChapterDraft draft) =>
-        new(
+        ComicChapterDraft draft)
+    {
+        var normalizedImages = draft.Images
+            .Select(NormalizeOptionalText)
+            .ToArray();
+        if (normalizedImages.Any(image => image.Length == 0))
+        {
+            throw Validation("Comic chapter images must not be empty.");
+        }
+
+        return new ComicChapterDraft(
             draft.Id,
             NormalizeRequiredText(draft.Title, "Chapter title"),
-            draft.Images.Select(NormalizeOptionalText).ToArray());
+            normalizedImages);
+    }
 
     private static string NormalizeHttpsUrl(string value)
     {
@@ -420,10 +430,9 @@ public sealed class ComicPublishingService : IComicPublishingService
                 var rightPart = rightParts[index].Value;
                 int comparison;
 
-                if (long.TryParse(leftPart, out var leftNumber) &&
-                    long.TryParse(rightPart, out var rightNumber))
+                if (char.IsDigit(leftPart[0]) && char.IsDigit(rightPart[0]))
                 {
-                    comparison = leftNumber.CompareTo(rightNumber);
+                    comparison = CompareNumericParts(leftPart, rightPart);
                 }
                 else
                 {
@@ -439,6 +448,25 @@ public sealed class ComicPublishingService : IComicPublishingService
             }
 
             return leftParts.Count.CompareTo(rightParts.Count);
+        }
+
+        private static int CompareNumericParts(string left, string right)
+        {
+            if (long.TryParse(left, out var leftNumber) &&
+                long.TryParse(right, out var rightNumber))
+            {
+                return leftNumber.CompareTo(rightNumber);
+            }
+
+            var normalizedLeft = left.TrimStart('0');
+            var normalizedRight = right.TrimStart('0');
+            normalizedLeft = normalizedLeft.Length == 0 ? "0" : normalizedLeft;
+            normalizedRight = normalizedRight.Length == 0 ? "0" : normalizedRight;
+
+            var lengthComparison = normalizedLeft.Length.CompareTo(normalizedRight.Length);
+            return lengthComparison != 0
+                ? lengthComparison
+                : StringComparer.Ordinal.Compare(normalizedLeft, normalizedRight);
         }
     }
 }
