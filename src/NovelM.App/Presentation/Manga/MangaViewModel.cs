@@ -194,7 +194,7 @@ public sealed class MangaViewModel : ObservableObject
         CancellationToken cancellationToken)
     {
         var requestVersion = StartRequest();
-        var searchText = SearchText;
+        var searchText = SearchText.Trim();
         var selectedOrder = SelectedOrder;
         try
         {
@@ -244,8 +244,16 @@ public sealed class MangaViewModel : ObservableObject
     private int StartRequest()
     {
         var requestVersion = Interlocked.Increment(ref _requestVersion);
-        IsBusy = true;
-        ErrorMessage = null;
+        if (IsLatestRequest(requestVersion))
+        {
+            IsBusy = true;
+        }
+
+        if (IsLatestRequest(requestVersion))
+        {
+            ErrorMessage = null;
+        }
+
         return requestVersion;
     }
 

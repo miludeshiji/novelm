@@ -57,6 +57,24 @@ public sealed class MangaViewModelTests
     }
 
     [TestMethod]
+    public async Task SearchAsync_PaddedKeyword_PassesTrimmedSnapshot()
+    {
+        var service = new FakeMangaService
+        {
+            SearchHandler = (_, _, page, _, _) => Task.FromResult(Page("search", page, 1))
+        };
+        var viewModel = CreateViewModel(service);
+        viewModel.SearchText = "  芙莉莲  ";
+
+        await viewModel.SearchAsync(CancellationToken.None);
+
+        Assert.AreEqual(1, service.SearchRequests.Count);
+        Assert.AreEqual("芙莉莲", service.SearchRequests[0].Keywords);
+        Assert.AreEqual("  芙莉莲  ", viewModel.SearchText);
+        Assert.IsFalse(viewModel.IsSortEnabled);
+    }
+
+    [TestMethod]
     public async Task SearchAsync_BlankKeyword_UsesListAndEnablesSort()
     {
         var service = new FakeMangaService
@@ -171,6 +189,49 @@ public sealed class MangaViewModelTests
         await newRequest;
 
         Assert.AreEqual("new", viewModel.Items[0].SeriesTitle);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
+    public async Task BeginRequest_ReentrantLatestFailurePreservesLatestState()
+    {
+        var cached = Page("cached", page: 1, totalPages: 2);
+        var stale = Page("stale", page: 1, totalPages: 9);
+        var service = new FakeMangaService
+        {
+            GetListHandler = (_, _, _, _) => Task.FromResult(cached)
+        };
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(CancellationToken.None);
+
+        var requestCount = 0;
+        service.GetListHandler = (_, _, _, _) => ++requestCount == 1
+            ? Task.FromException<PageResult<MangaListItem>>(
+                Error(AppErrorKind.Transport))
+            : Task.FromResult(stale);
+        var didReenter = false;
+        Task? latestRequest = null;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (!didReenter
+                && args.PropertyName == nameof(MangaViewModel.IsBusy)
+                && viewModel.IsBusy)
+            {
+                didReenter = true;
+                latestRequest = viewModel.LoadAsync(CancellationToken.None);
+            }
+        };
+
+        await viewModel.LoadAsync(CancellationToken.None);
+        await latestRequest!;
+
+        Assert.IsTrue(didReenter);
+        Assert.AreEqual(2, requestCount);
+        Assert.AreSame(cached.Items, viewModel.Items);
+        Assert.AreEqual(1, viewModel.CurrentPage);
+        Assert.AreEqual(2, viewModel.TotalPages);
+        Assert.AreEqual("网络连接失败，请检查网络后重试。", viewModel.ErrorMessage);
+        Assert.IsTrue(viewModel.HasError);
         Assert.IsFalse(viewModel.IsBusy);
     }
 
