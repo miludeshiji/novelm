@@ -12,3 +12,36 @@ publish/
 data/
 *.user
 *.suo
+
+# Local editors and caches
+.vscode/
+.idea/
+.fleet/
+.cache/
+
+# Local runtime
+runtime/
+
+# Logs and diagnostics
+*.log
+*.binlog
+*.dmp
+*.etl
+
+# Test and coverage output
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# Temporary and backup files
+*.tmp
+*.bak
+
+# Local secrets and signing keys
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.snk
