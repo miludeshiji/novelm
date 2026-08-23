@@ -75,6 +75,38 @@ public sealed class PublishingViewModelTests
     }
 
     [TestMethod]
+    public async Task LoadAsync_CurrentUserReentry_DoesNotInvalidatePendingLoad()
+    {
+        var completion = new TaskCompletionSource<PageResult<MyComicSummary>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var auth = new FakeAuthService { CurrentUser = Profile() };
+        var page = Page([Summary(1)], 2, 3);
+        var service = new FakeComicPublishingService
+        {
+            GetMyComicsHandler = (_, _, _, _) => completion.Task
+        };
+        var viewModel = CreateViewModel(auth, service);
+
+        var firstLoad = viewModel.LoadAsync(CancellationToken.None);
+        var secondLoad = viewModel.LoadAsync(CancellationToken.None);
+        Assert.IsTrue(secondLoad.IsCompletedSuccessfully);
+        await secondLoad;
+        var wasStillCheckingSession = viewModel.IsCheckingSession;
+        completion.SetResult(page);
+        await firstLoad;
+
+        Assert.AreEqual(1, service.GetMyComicsCalls);
+        Assert.IsTrue(wasStillCheckingSession);
+        Assert.AreSame(page.Items, viewModel.Comics);
+        Assert.AreEqual(2, viewModel.CurrentPage);
+        Assert.AreEqual(3, viewModel.TotalPages);
+        Assert.IsFalse(viewModel.IsSignedOut);
+        Assert.IsFalse(viewModel.IsCheckingSession);
+        Assert.IsFalse(viewModel.IsBusy);
+        Assert.IsNull(viewModel.ErrorMessage);
+    }
+
+    [TestMethod]
     public async Task SearchAsync_ResetsToFirstPageAndUsesKeyword()
     {
         var service = new FakeComicPublishingService

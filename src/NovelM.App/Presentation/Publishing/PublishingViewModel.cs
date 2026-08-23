@@ -27,6 +27,7 @@ public sealed class PublishingViewModel : ObservableObject
     private string? _noticeMessage;
     private UserProfile? _currentUser;
     private long _sessionGeneration;
+    private bool _loadInProgress;
 
     public PublishingViewModel(
         IAuthService authService,
@@ -135,6 +136,12 @@ public sealed class PublishingViewModel : ObservableObject
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
+        if (_loadInProgress)
+        {
+            return;
+        }
+
+        _loadInProgress = true;
         var sessionGeneration = CurrentSessionGeneration;
         IsCheckingSession = true;
         ErrorMessage = null;
@@ -175,6 +182,7 @@ public sealed class PublishingViewModel : ObservableObject
         finally
         {
             IsCheckingSession = false;
+            _loadInProgress = false;
         }
     }
 
