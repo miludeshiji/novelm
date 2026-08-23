@@ -217,12 +217,24 @@ public sealed class MangaViewModel : ObservableObject
                     cancellationToken);
             }
 
-            if (IsLatestRequest(requestVersion))
+            if (!IsLatestRequest(requestVersion))
             {
-                Items = result.Items;
-                CurrentPage = result.Page;
-                TotalPages = result.TotalPages;
+                return;
             }
+
+            Items = result.Items;
+            if (!IsLatestRequest(requestVersion))
+            {
+                return;
+            }
+
+            CurrentPage = result.Page;
+            if (!IsLatestRequest(requestVersion))
+            {
+                return;
+            }
+
+            TotalPages = result.TotalPages;
         }
         catch (OperationCanceledException)
         {

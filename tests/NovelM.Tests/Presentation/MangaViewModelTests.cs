@@ -236,6 +236,41 @@ public sealed class MangaViewModelTests
     }
 
     [TestMethod]
+    public async Task ListSuccess_ItemsNotificationReentryPreservesAllLatestState()
+    {
+        var stale = Page("stale", page: 1, totalPages: 2);
+        var latest = Page("latest", page: 3, totalPages: 7);
+        var requestCount = 0;
+        var service = new FakeMangaService
+        {
+            GetListHandler = (_, _, _, _) => Task.FromResult(
+                ++requestCount == 1 ? stale : latest)
+        };
+        var viewModel = CreateViewModel(service);
+        var didReenter = false;
+        Task? latestRequest = null;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (!didReenter
+                && args.PropertyName == nameof(MangaViewModel.Items))
+            {
+                didReenter = true;
+                latestRequest = viewModel.LoadAsync(CancellationToken.None);
+            }
+        };
+
+        await viewModel.LoadAsync(CancellationToken.None);
+        await latestRequest!;
+
+        Assert.IsTrue(didReenter);
+        Assert.AreEqual(2, requestCount);
+        Assert.AreSame(latest.Items, viewModel.Items);
+        Assert.AreEqual(3, viewModel.CurrentPage);
+        Assert.AreEqual(7, viewModel.TotalPages);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
     public async Task FailedPageLoad_PreservesPreviousItems()
     {
         var cached = Page("cached", page: 1, totalPages: 2);
