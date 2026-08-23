@@ -1,5 +1,6 @@
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Common;
+using NovelM_App.Domain.Errors;
 using NovelM_App.Domain.Manga;
 
 namespace NovelM_App.Infrastructure.SignalR;
@@ -24,7 +25,7 @@ internal sealed class SignalRMangaApi : IMangaApi
             new { Page = page, Size = size, Order = ToWireValue(order) },
             cancellationToken);
 
-        return ToPageResult(response);
+        return ToPageResult(response, HubMethodNames.GetComicList);
     }
 
     public async Task<PageResult<MangaListItem>> SearchAsync(
@@ -39,7 +40,7 @@ internal sealed class SignalRMangaApi : IMangaApi
             new { KeyWords = keywords, Mode = mode, Page = page, Size = size },
             cancellationToken);
 
-        return ToPageResult(response);
+        return ToPageResult(response, HubMethodNames.SearchComicSeries);
     }
 
     public async Task<MangaSeriesDetails> GetSeriesAsync(
@@ -56,13 +57,19 @@ internal sealed class SignalRMangaApi : IMangaApi
         var author = !string.IsNullOrWhiteSpace(series.Author)
             ? series.Author
             : classification?.Author;
-        var volumes = (response.Books ?? Array.Empty<ComicBookDto>())
+        var volumes = RequireNonNullElements(
+                response.Books,
+                HubMethodNames.GetComicSeriesInfo,
+                "Books")
             .Select(book => new MangaVolume(
                 book.Id,
                 book.Title,
                 book.Cover,
                 book.Uploader.UserName,
-                (book.Chapters ?? Array.Empty<ComicChapterSummaryDto>())
+                RequireNonNullElements(
+                        book.Chapters,
+                        HubMethodNames.GetComicSeriesInfo,
+                        "Books[].Chapters")
                     .Select(chapter => new MangaChapterSummary(
                         chapter.Id,
                         chapter.SortNum,
@@ -85,14 +92,19 @@ internal sealed class SignalRMangaApi : IMangaApi
             series.Introduction,
             series.LastUpdatedChapter,
             series.LastUpdatedAt,
-            classification?.Tags ?? Array.Empty<string>(),
+            RequireNonNullElements(
+                    classification?.Tags,
+                    HubMethodNames.GetComicSeriesInfo,
+                    "Series.Extra.classification.tags")
+                .ToArray(),
             volumes);
     }
 
     private static PageResult<MangaListItem> ToPageResult(
-        ComicListResponseDto response)
+        ComicListResponseDto response,
+        string methodName)
     {
-        var items = (response.Data ?? Array.Empty<ComicListItemDto>())
+        var items = RequireNonNullElements(response.Data, methodName, "Data")
             .Select(item => new MangaListItem(
                 item.Title,
                 item.Title,
@@ -106,6 +118,24 @@ internal sealed class SignalRMangaApi : IMangaApi
             items,
             response.Page,
             response.TotalPages);
+    }
+
+    private static IEnumerable<T> RequireNonNullElements<T>(
+        IReadOnlyList<T?>? items,
+        string methodName,
+        string fieldName)
+        where T : class
+    {
+        return items is null
+            ? Array.Empty<T>()
+            : items.Select(item => item ?? throw ProtocolError(methodName, fieldName));
+    }
+
+    private static AppException ProtocolError(string methodName, string fieldName)
+    {
+        return new AppException(
+            AppErrorKind.Protocol,
+            $"Hub method '{methodName}' response contained a null element in '{fieldName}'.");
     }
 
     private static string ToWireValue(ComicOrder order)

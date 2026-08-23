@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using NovelM.Tests.TestSupport;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Connection;
+using NovelM_App.Domain.Errors;
 using NovelM_App.Domain.Manga;
 using NovelM_App.Infrastructure.SignalR;
 
@@ -325,18 +326,40 @@ public sealed class SignalRMangaApiTests
     }
 
     [TestMethod]
-    public async Task GetSeriesAsync_NullBooksMapsEmptyVolumes()
+    public async Task DecodeListResponse_NullDataItemThrowsProtocolError()
     {
-        var response = new ComicSeriesInfoResponseDto
-        {
-            Series = MinimalSeries(),
-            Books = null!
-        };
+        var response = Decode<ComicListResponseDto>(
+            """{"Data":[null],"Page":1,"TotalPages":1}""",
+            "GetComicList");
+        var api = new SignalRMangaApi(
+            new TypedFakeSignalRConnection<ComicListResponseDto>(response));
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            api.GetListAsync(
+                1,
+                24,
+                ComicOrder.Latest,
+                CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Protocol, exception.Kind);
+        StringAssert.Contains(exception.Message, "GetComicList");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DecodeSeriesResponse_MissingOrNullBooksMapsEmptyVolumes(
+        bool includeNullBooks)
+    {
+        var json = SeriesResponseJson(includeNullBooks ? "null" : null);
+        var response = Decode<ComicSeriesInfoResponseDto>(
+            json,
+            "GetComicSeriesInfo");
         var api = new SignalRMangaApi(
             new TypedFakeSignalRConnection<ComicSeriesInfoResponseDto>(response));
 
         var result = await api.GetSeriesAsync(
-            "Title",
+            "Frieren",
             ComicOrder.Latest,
             CancellationToken.None);
 
@@ -344,46 +367,13 @@ public sealed class SignalRMangaApiTests
     }
 
     [TestMethod]
-    public async Task DecodeSeriesResponse_MapsProtocolFieldsAndNullChapters()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DecodeSeriesResponse_MapsMissingOrNullChaptersToEmpty(
+        bool includeNullChapters)
     {
-        const string json = """
-            {
-              "Series": {
-                "Id": "series-frieren",
-                "Title": "Frieren",
-                "OriginalTitle": null,
-                "Cover": "series.png",
-                "Author": null,
-                "Views": 9876,
-                "Favorite": 432,
-                "Introduction": "Journey after the adventure.",
-                "CreatedAt": "2025-01-02T03:04:05+08:00",
-                "LastUpdatedChapter": "Chapter 12",
-                "LastUpdatedAt": "2026-08-21T10:00:00+08:00",
-                "Extra": {
-                  "classification": {
-                    "author": "Kanehito Yamada",
-                    "subject_id": 40000,
-                    "series_name_cn": "葬送的芙莉莲",
-                    "tags": ["奇幻", "冒险"]
-                  }
-                }
-              },
-              "Books": [
-                {
-                  "Id": 88,
-                  "Title": "Volume 1",
-                  "Uploader": { "UserName": "reader", "Avatar": "avatar.png" },
-                  "CanDownload": true,
-                  "Cover": "volume.png",
-                  "CreatedAt": "2026-07-01T00:00:00Z",
-                  "LastUpdatedChapter": "Chapter 12",
-                  "LastUpdatedAt": "2026-08-21T10:00:00+08:00",
-                  "Chapters": null
-                }
-              ]
-            }
-            """;
+        var chaptersJson = includeNullChapters ? "null" : null;
+        var json = SeriesResponseJson($"[{ComicBookJson(chaptersJson)}]");
         var response = Decode<ComicSeriesInfoResponseDto>(
             json,
             "GetComicSeriesInfo");
@@ -399,7 +389,7 @@ public sealed class SignalRMangaApiTests
         CollectionAssert.AreEqual(
             new[] { "奇幻", "冒险" },
             classification.Tags?.ToArray());
-        Assert.IsNull(response.Books![0].Chapters);
+        Assert.IsNull(response.Books![0]!.Chapters);
 
         var api = new SignalRMangaApi(
             new TypedFakeSignalRConnection<ComicSeriesInfoResponseDto>(response));
@@ -419,6 +409,36 @@ public sealed class SignalRMangaApiTests
         Assert.AreEqual(0, result.Volumes[0].Chapters.Count);
     }
 
+    [TestMethod]
+    [DataRow("Books")]
+    [DataRow("Chapters")]
+    [DataRow("Tags")]
+    public async Task DecodeSeriesResponse_NullCollectionItemThrowsProtocolError(
+        string field)
+    {
+        var json = field switch
+        {
+            "Books" => SeriesResponseJson("[null]"),
+            "Chapters" => SeriesResponseJson($"[{ComicBookJson("[null]")}]"),
+            "Tags" => SeriesResponseJson("[]", "[null]"),
+            _ => throw new AssertFailedException($"Unexpected field '{field}'.")
+        };
+        var response = Decode<ComicSeriesInfoResponseDto>(
+            json,
+            "GetComicSeriesInfo");
+        var api = new SignalRMangaApi(
+            new TypedFakeSignalRConnection<ComicSeriesInfoResponseDto>(response));
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            api.GetSeriesAsync(
+                "Frieren",
+                ComicOrder.Latest,
+                CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Protocol, exception.Kind);
+        StringAssert.Contains(exception.Message, "GetComicSeriesInfo");
+    }
+
     private static ComicListResponseDto EmptyListResponse()
     {
         return new ComicListResponseDto
@@ -429,22 +449,59 @@ public sealed class SignalRMangaApiTests
         };
     }
 
-    private static ComicSeriesDto MinimalSeries()
+    private static string SeriesResponseJson(
+        string? booksJson,
+        string tagsJson = "[\"奇幻\",\"冒险\"]")
     {
-        return new ComicSeriesDto
-        {
-            Id = "series",
-            Title = "Title",
-            OriginalTitle = null,
-            Cover = "cover.png",
-            Author = null,
-            Views = 0,
-            Favorite = 0,
-            Introduction = string.Empty,
-            CreatedAt = DateTimeOffset.UnixEpoch,
-            LastUpdatedChapter = string.Empty,
-            LastUpdatedAt = DateTimeOffset.UnixEpoch
-        };
+        var booksProperty = booksJson is null
+            ? string.Empty
+            : $",\"Books\":{booksJson}";
+        return $$"""
+            {
+              "Series": {
+                "Id": "series-frieren",
+                "Title": "Frieren",
+                "OriginalTitle": null,
+                "Cover": "series.png",
+                "Author": null,
+                "Views": 9876,
+                "Favorite": 432,
+                "Introduction": "Journey after the adventure.",
+                "CreatedAt": "2025-01-02T03:04:05+08:00",
+                "LastUpdatedChapter": "Chapter 12",
+                "LastUpdatedAt": "2026-08-21T10:00:00+08:00",
+                "Extra": {
+                  "classification": {
+                    "author": "Kanehito Yamada",
+                    "subject_id": 40000,
+                    "series_name_cn": "葬送的芙莉莲",
+                    "tags": {{tagsJson}}
+                  }
+                }
+              }
+              {{booksProperty}}
+            }
+            """;
+    }
+
+    private static string ComicBookJson(string? chaptersJson)
+    {
+        var chaptersProperty = chaptersJson is null
+            ? string.Empty
+            : $",\"Chapters\":{chaptersJson}";
+        return $$"""
+            {
+              "Id": 88,
+              "Title": "Volume 1",
+              "Uploader": { "UserName": "reader", "Avatar": "avatar.png" },
+              "CanDownload": true,
+              "Cover": "volume.png",
+              "CreatedAt": "2026-07-01T00:00:00Z",
+              "LastUpdatedChapter": "Chapter 12",
+              "LastUpdatedAt": "2026-08-21T10:00:00+08:00"
+              {{chaptersProperty}}
+            }
+            """;
     }
 
     private static T Decode<T>(string json, string methodName)
