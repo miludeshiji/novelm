@@ -26,6 +26,7 @@ public sealed class PublishingViewModel : ObservableObject
     private string? _errorMessage;
     private string? _noticeMessage;
     private UserProfile? _currentUser;
+    private long _sessionGeneration;
 
     public PublishingViewModel(
         IAuthService authService,
@@ -134,6 +135,7 @@ public sealed class PublishingViewModel : ObservableObject
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
+        var sessionGeneration = CurrentSessionGeneration;
         IsCheckingSession = true;
         ErrorMessage = null;
         NoticeMessage = null;
@@ -141,14 +143,18 @@ public sealed class PublishingViewModel : ObservableObject
         {
             var user = _authService.CurrentUser
                 ?? await _authService.RestoreAsync(cancellationToken);
+            if (sessionGeneration != CurrentSessionGeneration)
+            {
+                return;
+            }
+
             if (user is null)
             {
                 EnterSignedOutState(errorMessage: null);
                 return;
             }
 
-            CurrentUser = user;
-            IsSignedOut = false;
+            sessionGeneration = EnterSignedInState(user);
             await LoadPageAsync(1, cancellationToken);
         }
         catch (OperationCanceledException)
@@ -161,13 +167,9 @@ public sealed class PublishingViewModel : ObservableObject
             {
                 EnterSignedOutState(_errorMessageMapper.Map(exception));
             }
-            else
+            else if (sessionGeneration == CurrentSessionGeneration)
             {
-                ErrorMessage = _errorMessageMapper.Map(exception);
-                if (CurrentUser is null)
-                {
-                    IsSignedOut = true;
-                }
+                EnterSignedOutState(_errorMessageMapper.Map(exception));
             }
         }
         finally
@@ -214,10 +216,15 @@ public sealed class PublishingViewModel : ObservableObject
         }
 
         long newId;
+        var sessionGeneration = CurrentSessionGeneration;
         StartOperation();
         try
         {
             newId = await _publishingService.CreateComicAsync(draft, cancellationToken);
+            if (!IsCurrentSession(sessionGeneration))
+            {
+                return;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -225,7 +232,7 @@ public sealed class PublishingViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, sessionGeneration);
             return;
         }
         finally
@@ -234,7 +241,7 @@ public sealed class PublishingViewModel : ObservableObject
         }
 
         await LoadPageAsync(1, cancellationToken);
-        if (!CanManage())
+        if (!IsCurrentSession(sessionGeneration))
         {
             return;
         }
@@ -266,10 +273,15 @@ public sealed class PublishingViewModel : ObservableObject
         }
 
         var originalIndex = FindComicIndex(selected.Id);
+        var sessionGeneration = CurrentSessionGeneration;
         StartOperation();
         try
         {
             await _publishingService.DeleteComicAsync(selected.Id, cancellationToken);
+            if (!IsCurrentSession(sessionGeneration))
+            {
+                return;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -277,7 +289,7 @@ public sealed class PublishingViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, sessionGeneration);
             return;
         }
         finally
@@ -333,9 +345,12 @@ public sealed class PublishingViewModel : ObservableObject
         }
 
         var user = CurrentUser!;
+        var sessionGeneration = CurrentSessionGeneration;
         NoticeMessage = null;
         await Editor.LoadAsync(comic.Id, user, cancellationToken);
-        if (!CanManage() || !Editor.IsLoaded || Editor.BookId != comic.Id)
+        if (!IsCurrentSession(sessionGeneration)
+            || !Editor.IsLoaded
+            || Editor.BookId != comic.Id)
         {
             return false;
         }
@@ -360,6 +375,7 @@ public sealed class PublishingViewModel : ObservableObject
 
         var keyword = SearchText.Trim();
         var selectedId = SelectedComic?.Id;
+        var sessionGeneration = CurrentSessionGeneration;
         StartOperation();
         try
         {
@@ -368,6 +384,11 @@ public sealed class PublishingViewModel : ObservableObject
                 PageSize,
                 keyword,
                 cancellationToken);
+            if (!IsCurrentSession(sessionGeneration))
+            {
+                return false;
+            }
+
             Comics = result.Items;
             CurrentPage = result.Page;
             TotalPages = result.TotalPages;
@@ -398,7 +419,7 @@ public sealed class PublishingViewModel : ObservableObject
         }
         catch (Exception exception)
         {
-            HandleFailure(exception);
+            HandleFailure(exception, sessionGeneration);
             return false;
         }
         finally
@@ -414,7 +435,7 @@ public sealed class PublishingViewModel : ObservableObject
         NoticeMessage = null;
     }
 
-    private void HandleFailure(Exception exception)
+    private void HandleFailure(Exception exception, long sessionGeneration)
     {
         if (IsUnauthorized(exception))
         {
@@ -422,11 +443,15 @@ public sealed class PublishingViewModel : ObservableObject
             return;
         }
 
-        ErrorMessage = _errorMessageMapper.Map(exception);
+        if (IsCurrentSession(sessionGeneration))
+        {
+            ErrorMessage = _errorMessageMapper.Map(exception);
+        }
     }
 
     private void EnterSignedOutState(string? errorMessage)
     {
+        AdvanceSession();
         CurrentUser = null;
         Comics = Array.Empty<MyComicSummary>();
         SelectedComic = null;
@@ -435,6 +460,26 @@ public sealed class PublishingViewModel : ObservableObject
         Editor.Clear();
         IsSignedOut = true;
         ErrorMessage = errorMessage;
+    }
+
+    private long EnterSignedInState(UserProfile user)
+    {
+        var sessionGeneration = AdvanceSession();
+        CurrentUser = user;
+        IsSignedOut = false;
+        return sessionGeneration;
+    }
+
+    private long CurrentSessionGeneration => Volatile.Read(ref _sessionGeneration);
+
+    private long AdvanceSession()
+    {
+        return Interlocked.Increment(ref _sessionGeneration);
+    }
+
+    private bool IsCurrentSession(long sessionGeneration)
+    {
+        return sessionGeneration == CurrentSessionGeneration && CanManage();
     }
 
     private bool CanManage()

@@ -820,6 +820,77 @@ public sealed class ComicEditorViewModelTests
         Assert.IsFalse(viewModel.IsUploading);
     }
 
+    [TestMethod]
+    public async Task SaveNewChapterAsync_WhileUploadPending_DoesNotCreateUntilUploadCompletes()
+    {
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        service.CreateChapterHandler = (_, _, _, _) => Task.FromResult(
+            new CreateChapterResult(
+                88,
+                [new ComicChapterSummary(88, 2, "New") ]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.ChapterTitle = "New";
+
+        var upload = viewModel.UploadChapterImagesAsync(
+            [File("chapter.jpg")],
+            CancellationToken.None);
+        await viewModel.SaveChapterAsync(CancellationToken.None);
+
+        Assert.AreEqual(0, service.CreateChapterCalls);
+
+        uploadCompletion.SetResult(new ImageUploadBatchResult(
+            [new UploadedImage("chapter.jpg", "https://i/chapter.jpg")],
+            []));
+        await upload;
+        CollectionAssert.AreEqual(
+            new[] { "https://i/chapter.jpg" },
+            viewModel.ChapterImages.ToArray());
+
+        await viewModel.SaveChapterAsync(CancellationToken.None);
+
+        Assert.AreEqual(1, service.CreateChapterCalls);
+        Assert.AreEqual(88L, viewModel.SelectedChapter?.Id);
+    }
+
+    [TestMethod]
+    public async Task UploadChapterImagesAsync_WhileCreatePending_DoesNotUpload()
+    {
+        var createCompletion = new TaskCompletionSource<CreateChapterResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.CreateChapterHandler = (_, _, _, _) => createCompletion.Task;
+        service.UploadHandler = (_, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                [new UploadedImage("late.jpg", "https://i/late.jpg")],
+                []));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.ChapterTitle = "New";
+        viewModel.ChapterImages.Add("https://i/existing.jpg");
+
+        var save = viewModel.SaveChapterAsync(CancellationToken.None);
+        await viewModel.UploadChapterImagesAsync([File("late.jpg")], CancellationToken.None);
+
+        Assert.AreEqual(0, service.UploadCalls);
+        CollectionAssert.AreEqual(
+            new[] { "https://i/existing.jpg" },
+            viewModel.ChapterImages.ToArray());
+
+        createCompletion.SetResult(new CreateChapterResult(
+            88,
+            [new ComicChapterSummary(88, 2, "New") ]));
+        await save;
+
+        Assert.AreEqual(88L, viewModel.SelectedChapter?.Id);
+        Assert.IsFalse(viewModel.IsCreatingChapter);
+    }
+
     internal static ComicEditorViewModel CreateViewModel(IComicPublishingService service) =>
         new(service, new ErrorMessageMapper());
 
@@ -890,6 +961,7 @@ internal sealed class FakeComicPublishingService : IComicPublishingService
     public int GetEditDetailsCalls { get; private set; }
     public int GetChapterCalls { get; private set; }
     public int UploadCalls { get; private set; }
+    public int CreateChapterCalls { get; private set; }
     public int RequestedPage { get; private set; }
     public int RequestedSize { get; private set; }
     public string? RequestedKeywords { get; private set; }
@@ -976,6 +1048,7 @@ internal sealed class FakeComicPublishingService : IComicPublishingService
 
     public Task<CreateChapterResult> CreateChapterAsync(long bookId, int sortNum, ComicChapterDraft draft, CancellationToken cancellationToken)
     {
+        CreateChapterCalls++;
         CreatedSortNum = sortNum;
         CreatedChapterDraft = draft;
         LastCancellationToken = cancellationToken;

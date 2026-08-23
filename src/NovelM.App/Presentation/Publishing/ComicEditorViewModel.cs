@@ -401,7 +401,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     public async Task SaveInfoAsync(CancellationToken cancellationToken)
     {
-        if (BookId is not long bookId || IsBusy)
+        if (BookId is not long bookId || IsBusy || IsUploading)
         {
             return;
         }
@@ -436,7 +436,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     public async Task SaveSettingsAsync(CancellationToken cancellationToken)
     {
-        if (BookId is not long bookId || IsBusy)
+        if (BookId is not long bookId || IsBusy || IsUploading)
         {
             return;
         }
@@ -571,7 +571,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     public async Task SaveChapterAsync(CancellationToken cancellationToken)
     {
-        if (BookId is not long bookId || IsBusy)
+        if (BookId is not long bookId || IsBusy || IsUploading)
         {
             return;
         }
@@ -878,7 +878,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         Action<ImageUploadBatchResult> applySuccesses,
         CancellationToken cancellationToken)
     {
-        if (IsUploading)
+        if (IsUploading || IsBusy)
         {
             return;
         }

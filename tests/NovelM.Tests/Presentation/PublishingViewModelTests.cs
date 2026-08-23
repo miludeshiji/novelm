@@ -345,6 +345,76 @@ public sealed class PublishingViewModelTests
     }
 
     [TestMethod]
+    public async Task RefreshAsync_EditorUnauthorizedThenLateSuccess_DoesNotRestoreSignedOutState()
+    {
+        var refreshCompletion = new TaskCompletionSource<PageResult<MyComicSummary>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var comic = Summary(1);
+        var listCalls = 0;
+        var service = new FakeComicPublishingService
+        {
+            GetMyComicsHandler = (_, _, _, _) => ++listCalls == 1
+                ? Task.FromResult(Page([comic], 1, 1))
+                : refreshCompletion.Task,
+            GetEditDetailsHandler = (_, _) => Task.FromResult(
+                ComicEditorViewModelTests.Details() with { Id = 1 }),
+            UpdateInfoHandler = (_, _, _) => Task.FromException(
+                new AppException(AppErrorKind.Unauthorized, "unsafe"))
+        };
+        var viewModel = CreateLoadedViewModel(service);
+        await viewModel.LoadAsync(CancellationToken.None);
+        await viewModel.SelectComicAsync(comic, false, CancellationToken.None);
+        viewModel.Editor.Title = "dirty";
+
+        var refresh = viewModel.RefreshAsync(CancellationToken.None);
+        await viewModel.Editor.SaveInfoAsync(CancellationToken.None);
+        refreshCompletion.SetResult(Page([Summary(9)], 2, 3));
+        await refresh;
+
+        Assert.IsTrue(viewModel.IsSignedOut);
+        Assert.AreEqual(0, viewModel.Comics.Count);
+        Assert.IsNull(viewModel.SelectedComic);
+        Assert.IsNull(viewModel.Editor.BookId);
+        Assert.IsFalse(viewModel.Editor.IsLoaded);
+        Assert.AreEqual("登录已失效，请重新登录。", viewModel.ErrorMessage);
+    }
+
+    [TestMethod]
+    public async Task RefreshAsync_EditorUnauthorizedThenLateTransport_DoesNotReplaceSessionError()
+    {
+        var refreshCompletion = new TaskCompletionSource<PageResult<MyComicSummary>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var comic = Summary(1);
+        var listCalls = 0;
+        var service = new FakeComicPublishingService
+        {
+            GetMyComicsHandler = (_, _, _, _) => ++listCalls == 1
+                ? Task.FromResult(Page([comic], 1, 1))
+                : refreshCompletion.Task,
+            GetEditDetailsHandler = (_, _) => Task.FromResult(
+                ComicEditorViewModelTests.Details() with { Id = 1 }),
+            UpdateInfoHandler = (_, _, _) => Task.FromException(
+                new AppException(AppErrorKind.Unauthorized, "unsafe"))
+        };
+        var viewModel = CreateLoadedViewModel(service);
+        await viewModel.LoadAsync(CancellationToken.None);
+        await viewModel.SelectComicAsync(comic, false, CancellationToken.None);
+        viewModel.Editor.Title = "dirty";
+
+        var refresh = viewModel.RefreshAsync(CancellationToken.None);
+        await viewModel.Editor.SaveInfoAsync(CancellationToken.None);
+        refreshCompletion.SetException(
+            new AppException(AppErrorKind.Transport, "unsafe"));
+        await refresh;
+
+        Assert.IsTrue(viewModel.IsSignedOut);
+        Assert.AreEqual(0, viewModel.Comics.Count);
+        Assert.IsNull(viewModel.SelectedComic);
+        Assert.IsNull(viewModel.Editor.BookId);
+        Assert.AreEqual("登录已失效，请重新登录。", viewModel.ErrorMessage);
+    }
+
+    [TestMethod]
     public async Task Cancellation_IsRethrownAndBusyFlagsReset()
     {
         using var source = new CancellationTokenSource();
