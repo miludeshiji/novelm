@@ -157,9 +157,14 @@ jobs:
           $installDir = Join-Path $env:RUNNER_TEMP 'NovelM-installed'
           $installedExe = Join-Path $installDir 'NovelM.exe'
 
-          & $installerPath '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART' "/DIR=$installDir"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Installer smoke test failed with exit code $LASTEXITCODE."
+          $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            "/DIR=`"$installDir`""
+          ) -Wait -PassThru
+          if ($installerProcess.ExitCode -ne 0) {
+            throw "Installer smoke test failed with exit code $($installerProcess.ExitCode)."
           }
           if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
             throw 'Installer smoke test did not install NovelM.exe.'
@@ -176,9 +181,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
             throw 'Installer smoke test did not create unins000.exe.'
           }
-          & $uninstallerPath '/VERYSILENT' '/SUPPRESSMSGBOXES' '/NORESTART'
-          if ($LASTEXITCODE -ne 0) {
-            throw "Uninstaller smoke test failed with exit code $LASTEXITCODE."
+          $uninstallerProcess = Start-Process -FilePath $uninstallerPath -ArgumentList @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART'
+          ) -Wait -PassThru
+          if ($uninstallerProcess.ExitCode -ne 0) {
+            throw "Uninstaller smoke test failed with exit code $($uninstallerProcess.ExitCode)."
           }
           if (Test-Path -LiteralPath $installedExe -PathType Leaf) {
             throw 'Uninstaller did not remove NovelM.exe.'
@@ -207,6 +216,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
       ZIP_NAME: ${{ needs.build.outputs.zip_name }}
       INSTALLER_NAME: ${{ needs.build.outputs.installer_name }}
@@ -229,7 +239,7 @@ jobs:
             }
           }
 
-          $generatedNotes = gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f "tag_name=$env:GITHUB_REF_NAME" --jq .body
+          $generatedNotes = (gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f "tag_name=$env:GITHUB_REF_NAME" --jq .body | Out-String).TrimEnd()
           if ($LASTEXITCODE -ne 0) {
             throw 'GitHub-generated release notes could not be created.'
           }
