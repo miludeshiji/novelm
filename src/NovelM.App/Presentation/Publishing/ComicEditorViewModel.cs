@@ -51,6 +51,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     {
         _publishingService = publishingService;
         _errorMessageMapper = errorMessageMapper;
+        _uploadProperties = CaptureUploadProperties();
         ObserveUploadQueues();
         Tags.CollectionChanged += (_, _) => MarkSettingsDirty();
         ChapterImages.CollectionChanged += (_, _) => MarkChapterDirty();
@@ -289,7 +290,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _selectedChapter, value))
             {
-                OnPropertyChanged(nameof(CanSaveChapter));
+                RefreshUploadProperties();
             }
         }
     }
@@ -315,7 +316,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _isCreatingChapter, value))
             {
-                OnPropertyChanged(nameof(CanSaveChapter));
+                RefreshUploadProperties();
             }
         }
     }
@@ -341,7 +342,14 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     public bool ChapterHasUnsavedChanges
     {
         get => _chapterHasUnsavedChanges || HasPendingChapterImages;
-        private set => SetDirtyProperty(ref _chapterHasUnsavedChanges, value);
+        private set
+        {
+            if (_chapterHasUnsavedChanges != value)
+            {
+                _chapterHasUnsavedChanges = value;
+                RefreshUploadProperties();
+            }
+        }
     }
 
     public bool HasUnsavedChanges =>
@@ -1159,7 +1167,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     {
         if (SetProperty(ref field, value, propertyName))
         {
-            OnPropertyChanged(nameof(HasUnsavedChanges));
+            RefreshUploadProperties();
         }
     }
 

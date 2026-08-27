@@ -1228,6 +1228,14 @@ public sealed class ComicEditorViewModelTests
             false,
             CancellationToken.None);
         viewModel.StageBatchChapters([Folder("第2章", Source("2.jpg"))]);
+        var canSaveNotifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ComicEditorViewModel.CanSaveChapter))
+            {
+                canSaveNotifications++;
+            }
+        };
 
         await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
 
@@ -1238,6 +1246,7 @@ public sealed class ComicEditorViewModelTests
         Assert.AreSame(
             viewModel.Chapters.Single(chapter => chapter.Id == 70),
             viewModel.SelectedChapter);
+        Assert.AreEqual(2, canSaveNotifications);
     }
 
     [TestMethod]
@@ -1884,7 +1893,7 @@ public sealed class ComicEditorViewModelTests
         CollectionAssert.Contains(
             changedProperties,
             nameof(ComicEditorViewModel.CanUploadPendingChapterImages));
-        CollectionAssert.Contains(
+        CollectionAssert.DoesNotContain(
             changedProperties,
             nameof(ComicEditorViewModel.HasUnsavedChanges));
     }
@@ -1950,7 +1959,7 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
-    public async Task BatchProgressText_ImageChapterAndCollectionChangesNotify()
+    public async Task BatchProgressText_NotifiesOnlyWhenDisplayedCountsChange()
     {
         var viewModel = CreateViewModel(LoadedService());
         await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
@@ -1965,6 +1974,12 @@ public sealed class ComicEditorViewModelTests
         changedProperties.Clear();
         var chapter = viewModel.PendingBatchChapters.Single();
         chapter.Images.Single().BeginUpload();
+        CollectionAssert.DoesNotContain(
+            changedProperties,
+            nameof(ComicEditorViewModel.BatchProgressText));
+
+        changedProperties.Clear();
+        chapter.Images.Single().Complete("https://i/1.jpg");
         CollectionAssert.Contains(
             changedProperties,
             nameof(ComicEditorViewModel.BatchProgressText));
@@ -2661,6 +2676,12 @@ public sealed class ComicEditorViewModelTests
 
         Assert.AreEqual(3, viewModel.PendingChapterImages.Count);
         Assert.AreEqual("已忽略 2 个重复路径。", viewModel.NoticeMessage);
+
+        viewModel.StageChapterImages(
+            [Source("4.jpg", @"C:\images\4.jpg")]);
+
+        Assert.AreEqual(4, viewModel.PendingChapterImages.Count);
+        Assert.IsNull(viewModel.NoticeMessage);
     }
 
     [TestMethod]
@@ -2697,6 +2718,14 @@ public sealed class ComicEditorViewModelTests
             new[] { "第1章", "第2章", "第3章" },
             viewModel.PendingBatchChapters.Select(chapter => chapter.Title).ToArray());
         Assert.AreEqual("已忽略 2 个重复路径。", viewModel.NoticeMessage);
+
+        viewModel.StageBatchChapters(
+            [Folder("第4章", Source("4.jpg"))]);
+
+        CollectionAssert.AreEqual(
+            new[] { "第1章", "第2章", "第3章", "第4章" },
+            viewModel.PendingBatchChapters.Select(chapter => chapter.Title).ToArray());
+        Assert.IsNull(viewModel.NoticeMessage);
     }
 
     [TestMethod]
@@ -2748,7 +2777,7 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
-    public async Task UploadQueueChangesNotifyCompleteDerivedPropertySet()
+    public async Task UploadQueueChangesNotifyOnlyChangedDerivedProperties()
     {
         var viewModel = CreateViewModel(LoadedService());
         await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
@@ -2759,21 +2788,57 @@ public sealed class ComicEditorViewModelTests
         viewModel.PendingChapterImages.Add(
             new PendingComicImage(Source("1.jpg"), 0));
 
-        var expected = new[]
-        {
-            nameof(ComicEditorViewModel.HasPendingChapterImages),
-            nameof(ComicEditorViewModel.HasPendingBatchChapters),
-            nameof(ComicEditorViewModel.CanUploadPendingChapterImages),
-            nameof(ComicEditorViewModel.CanUploadBatchChapters),
-            nameof(ComicEditorViewModel.CanSaveChapter),
-            nameof(ComicEditorViewModel.BatchProgressText),
-            nameof(ComicEditorViewModel.ChapterHasUnsavedChanges),
-            nameof(ComicEditorViewModel.HasUnsavedChanges)
-        };
-        foreach (var propertyName in expected)
-        {
-            CollectionAssert.Contains(changedProperties, propertyName);
-        }
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                nameof(ComicEditorViewModel.HasPendingChapterImages),
+                nameof(ComicEditorViewModel.CanUploadPendingChapterImages),
+                nameof(ComicEditorViewModel.CanSaveChapter),
+                nameof(ComicEditorViewModel.ChapterHasUnsavedChanges),
+                nameof(ComicEditorViewModel.HasUnsavedChanges)
+            },
+            changedProperties.ToArray());
+    }
+
+    [TestMethod]
+    public async Task BatchImageStateChangeDoesNotNotifyUnrelatedDerivedProperties()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("1.jpg"))]);
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.PendingBatchChapters.Single().Images.Single().BeginUpload();
+
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.CanUploadBatchChapters));
+        CollectionAssert.DoesNotContain(
+            changedProperties,
+            nameof(ComicEditorViewModel.HasPendingChapterImages));
+        CollectionAssert.DoesNotContain(
+            changedProperties,
+            nameof(ComicEditorViewModel.CanSaveChapter));
+        CollectionAssert.DoesNotContain(
+            changedProperties,
+            nameof(ComicEditorViewModel.ChapterHasUnsavedChanges));
+    }
+
+    [TestMethod]
+    public async Task RefreshWithUnchangedDerivedValuesDoesNotNotify()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("1.jpg"))]);
+        var chapter = viewModel.PendingBatchChapters.Single();
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        chapter.ErrorMessage = "first";
+        chapter.ErrorMessage = "second";
+
+        Assert.AreEqual(0, changedProperties.Count);
     }
 
     internal static ComicEditorViewModel CreateViewModel(IComicPublishingService service) =>
