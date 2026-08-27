@@ -22,27 +22,35 @@ OutputBaseFilename=NovelM-{#MyAppVersion}-setup
 Name: "chinesesimp"; MessagesFile: "Languages\ChineseSimplified.isl"
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "data\*;runtime\*"
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\data\*,\runtime\*"
 Source: "..\src\NovelM.App\Assets\AppIcon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\轻书架"; Filename: "{app}\NovelM.exe"
 
 [Code]
-procedure AddMissing(var Missing: string; const Item: string);
+procedure AddMissing(var Missing: string; const Item, Url: string);
 begin
   if Missing <> '' then
-    Missing := Missing + '、';
-  Missing := Missing + Item;
+    Missing := Missing + #13#10;
+  Missing := Missing + Item + ': ' + Url;
 end;
 
 function HasDotNetDesktopRuntime(): Boolean;
 var
+  InstallLocation: string;
   RootPath: string;
   FindRec: TFindRec;
 begin
   Result := False;
-  RootPath := ExpandConstant('{pf64}\dotnet\shared\Microsoft.WindowsDesktop.App');
+  if not RegQueryStringValue(HKLM32, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64', 'InstallLocation', InstallLocation) then
+    Exit;
+  if InstallLocation = '' then
+    Exit;
+  RootPath := InstallLocation;
+  if RootPath[Length(RootPath)] <> '\' then
+    RootPath := RootPath + '\';
+  RootPath := RootPath + 'shared\Microsoft.WindowsDesktop.App';
   if FindFirst(RootPath + '\10.*', FindRec) then
   begin
     try
@@ -70,11 +78,16 @@ begin
   Result := Exec(PowerShellPath, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
-function HasVCRuntime(): Boolean;
+function HasVCRuntimeAt(RootKey: Integer): Boolean;
 var
   Installed: Cardinal;
 begin
-  Result := RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) and (Installed = 1);
+  Result := RegQueryDWordValue(RootKey, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) and (Installed = 1);
+end;
+
+function HasVCRuntime(): Boolean;
+begin
+  Result := HasVCRuntimeAt(HKLM32) or HasVCRuntimeAt(HKLM64);
 end;
 
 function InitializeSetup(): Boolean;
@@ -83,20 +96,16 @@ var
 begin
   Missing := '';
   if not HasDotNetDesktopRuntime() then
-    AddMissing(Missing, 'x64 .NET 10 Desktop Runtime');
+    AddMissing(Missing, 'x64 .NET 10 Desktop Runtime', 'https://dotnet.microsoft.com/download/dotnet/10.0');
   if not HasWindowsAppRuntime() then
-    AddMissing(Missing, '当前用户注册且健康的 x64 Microsoft.WindowsAppRuntime.2.4');
+    AddMissing(Missing, '当前用户注册且健康的 x64 Microsoft.WindowsAppRuntime.2.4', 'https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads');
   if not HasVCRuntime() then
-    AddMissing(Missing, 'x64 Microsoft Visual C++ 2015-2022 运行库');
+    AddMissing(Missing, 'x64 Microsoft Visual C++ 2015-2022 运行库', 'https://aka.ms/vc14/vc_redist.x64.exe');
 
   if Missing <> '' then
   begin
-    MsgBox('安装前检查失败，缺少以下组件：' + #13#10 + Missing + #13#10 + #13#10 +
-      '请从以下地址安装：' + #13#10 +
-      'x64 .NET 10 Desktop Runtime: https://dotnet.microsoft.com/download/dotnet/10.0' + #13#10 +
-      'Windows App Runtime: https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads' + #13#10 +
-      'Visual C++ 2015-2022: https://aka.ms/vc14/vc_redist.x64.exe',
-      mbError, MB_OK);
+    SuppressibleMsgBox('安装前检查失败，缺少以下组件及对应下载地址：' + #13#10 + Missing,
+      mbError, MB_OK, IDOK);
     Result := False;
   end
   else
