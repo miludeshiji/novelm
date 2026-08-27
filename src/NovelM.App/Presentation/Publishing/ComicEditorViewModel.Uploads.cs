@@ -55,18 +55,22 @@ public sealed partial class ComicEditorViewModel
         var paths = PendingChapterImages
             .Select(item => NormalizePath(item.FilePath))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var additions = new List<LocalImageSource>();
         foreach (var source in sources)
         {
             if (paths.Add(NormalizePath(source.FilePath)))
             {
-                PendingChapterImages.Add(new PendingComicImage(source, 0));
+                additions.Add(source);
             }
         }
 
-        SortAndRenumber(PendingChapterImages);
-        if (PendingChapterImages.Count > 0)
+        foreach (var source in additions.OrderBy(
+                     item => item.FileName,
+                     NaturalNameComparer.Instance))
         {
-            ChapterHasUnsavedChanges = true;
+            PendingChapterImages.Add(new PendingComicImage(
+                source,
+                PendingChapterImages.Count));
         }
     }
 
@@ -106,7 +110,7 @@ public sealed partial class ComicEditorViewModel
         }
 
         PendingChapterImages.Remove(item);
-        SortAndRenumber(PendingChapterImages);
+        RenumberPositions(PendingChapterImages);
         CommitPendingChapterImagesIfComplete();
         NotifyUploadAvailabilityChanged();
     }
@@ -170,6 +174,7 @@ public sealed partial class ComicEditorViewModel
         OnPropertyChanged(nameof(HasPendingChapterImages));
         OnPropertyChanged(nameof(CanUploadPendingChapterImages));
         OnPropertyChanged(nameof(CanSaveChapter));
+        OnPropertyChanged(nameof(ChapterHasUnsavedChanges));
         OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 
@@ -470,17 +475,12 @@ public sealed partial class ComicEditorViewModel
             Path.DirectorySeparatorChar,
             Path.AltDirectorySeparatorChar);
 
-    private static void SortAndRenumber(
+    private static void RenumberPositions(
         ObservableCollection<PendingComicImage> images)
     {
-        var ordered = images
-            .OrderBy(item => item.FileName, NaturalNameComparer.Instance)
-            .ToArray();
-        images.Clear();
-        for (var index = 0; index < ordered.Length; index++)
+        for (var index = 0; index < images.Count; index++)
         {
-            ordered[index].Position = index;
-            images.Add(ordered[index]);
+            images[index].Position = index;
         }
     }
 

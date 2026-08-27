@@ -340,7 +340,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
 
     public bool ChapterHasUnsavedChanges
     {
-        get => _chapterHasUnsavedChanges;
+        get => _chapterHasUnsavedChanges || HasPendingChapterImages;
         private set => SetDirtyProperty(ref _chapterHasUnsavedChanges, value);
     }
 
@@ -348,7 +348,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         InfoHasUnsavedChanges
         || SettingsHasUnsavedChanges
         || ChapterHasUnsavedChanges
-        || HasPendingChapterImages
         || HasPendingBatchChapters;
 
     public async Task LoadAsync(

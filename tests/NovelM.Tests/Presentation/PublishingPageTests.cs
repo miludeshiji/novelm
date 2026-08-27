@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using NovelM_App.Presentation.Publishing;
 
 namespace NovelM.Tests.Presentation;
@@ -37,4 +38,28 @@ public sealed class PublishingPageTests
         Assert.IsNull(PublishingPage.ToNullableInt64(twoToThePowerOf63));
         Assert.IsNull(PublishingPage.ToNullableInt64(double.MaxValue));
     }
+
+    [TestMethod]
+    public void UpdateViewState_SaveChapterButtonUsesEditorSaveGate()
+    {
+        var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
+        var pagePath = Path.GetFullPath(Path.Combine(
+            testDirectory,
+            "..",
+            "..",
+            "..",
+            "src",
+            "NovelM.App",
+            "Presentation",
+            "Publishing",
+            "PublishingPage.xaml.cs"));
+        var pageSource = File.ReadAllText(pagePath);
+
+        StringAssert.Contains(
+            pageSource,
+            "SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;");
+    }
+
+    private static string CurrentSourceFile(
+        [CallerFilePath] string sourceFile = "") => sourceFile;
 }

@@ -1134,8 +1134,7 @@ public sealed partial class PublishingPage : Page
             && !isBusy;
         ClearChapterImagesButton.IsEnabled = Editor.ChapterImages.Count > 0 && !isBusy;
         ChapterImagesGridView.CanReorderItems = !isBusy;
-        SaveChapterButton.IsEnabled = (Editor.IsCreatingChapter
-            || Editor.SelectedChapter is not null) && !isBusy;
+        SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;
 
         var chapterIndex = Editor.SelectedChapter is null
             ? -1
