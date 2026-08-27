@@ -219,13 +219,13 @@ public sealed partial class ComicEditorViewModel
                 }
                 catch (OperationCanceledException)
                 {
-                    RestorePendingImages(targets);
-                    chapter.State = ComicChapterUploadState.Ready;
+                    RestoreBatchChapterImageUpload(chapter, targets);
                     throw;
                 }
                 catch (AppException exception)
                     when (exception.Kind == AppErrorKind.Unauthorized)
                 {
+                    RestoreBatchChapterImageUpload(chapter, targets);
                     throw;
                 }
                 catch (Exception exception)
@@ -315,16 +315,18 @@ public sealed partial class ComicEditorViewModel
             }
             else if (chapter.AllImagesUploaded)
             {
-                chapter.ErrorMessage = null;
-                chapter.State = shouldResume
-                    ? ComicChapterUploadState.Ready
-                    : ComicChapterUploadState.WaitingForPreviousChapter;
-                if (shouldResume)
+                UpdateBatchChapterAfterImageUpload(chapter);
+                if (chapter.State == ComicChapterUploadState.Ready
+                    && shouldResume)
                 {
                     await CreateReadyBatchPrefixAsync(
                         bookId,
                         generation,
                         cancellationToken);
+                }
+                else if (chapter.State == ComicChapterUploadState.Ready)
+                {
+                    chapter.State = ComicChapterUploadState.WaitingForPreviousChapter;
                 }
             }
         });
@@ -643,7 +645,7 @@ public sealed partial class ComicEditorViewModel
 
                 ApplyImageResults([image], result);
                 UpdateBatchChapterAfterImageUpload(chapter);
-                if (chapter.AllImagesUploaded)
+                if (chapter.State == ComicChapterUploadState.Ready)
                 {
                     await CreateReadyBatchPrefixAsync(
                         bookId,
@@ -653,13 +655,17 @@ public sealed partial class ComicEditorViewModel
             }
             catch (OperationCanceledException)
             {
-                RestorePendingImages([image]);
-                chapter.State = ComicChapterUploadState.Ready;
+                RestoreBatchChapterImageUpload(chapter, [image]);
                 throw;
             }
             catch (AppException exception)
                 when (exception.Kind == AppErrorKind.Unauthorized)
             {
+                if (image.State == ComicImageUploadState.Uploading)
+                {
+                    RestoreBatchChapterImageUpload(chapter, [image]);
+                }
+
                 throw;
             }
             catch (Exception exception)
@@ -726,6 +732,13 @@ public sealed partial class ComicEditorViewModel
         foreach (var chapter in PendingBatchChapters.Where(
                      item => item.State != ComicChapterUploadState.Completed))
         {
+            if (chapter.HasSelectionError)
+            {
+                chapter.State = ComicChapterUploadState.Failed;
+                MarkLaterUploadedChaptersWaiting(chapter);
+                return;
+            }
+
             if (chapter.State == ComicChapterUploadState.Failed
                 && chapter.AllImagesUploaded
                 && chapter.Id != retryChapterId)
@@ -778,6 +791,9 @@ public sealed partial class ComicEditorViewModel
             catch (AppException exception)
                 when (exception.Kind == AppErrorKind.Unauthorized)
             {
+                chapter.ErrorMessage = _errorMessageMapper.Map(exception);
+                chapter.State = ComicChapterUploadState.Failed;
+                MarkLaterUploadedChaptersWaiting(chapter);
                 throw;
             }
             catch (Exception exception)
@@ -815,8 +831,13 @@ public sealed partial class ComicEditorViewModel
             RenumberChapters();
             if (selectedId is long id)
             {
-                SelectedChapter = Chapters.FirstOrDefault(chapter => chapter.Id == id)
-                    ?? SelectedChapter;
+                var selected = Chapters.FirstOrDefault(chapter => chapter.Id == id);
+                if (selected is not null && !ReferenceEquals(_selectedChapter, selected))
+                {
+                    _selectedChapter = selected;
+                    OnPropertyChanged(nameof(SelectedChapter));
+                    OnPropertyChanged(nameof(CanSaveChapter));
+                }
             }
 
             NewChapterSortNum = Chapters.Count + 1;
@@ -833,24 +854,51 @@ public sealed partial class ComicEditorViewModel
         }
     }
 
+    private static void RestoreBatchChapterImageUpload(
+        PendingComicChapter chapter,
+        IEnumerable<PendingComicImage> targets)
+    {
+        RestorePendingImages(targets);
+        UpdateBatchChapterAfterImageUpload(chapter);
+    }
+
     private static void UpdateBatchChapterAfterImageUpload(
         PendingComicChapter chapter)
     {
-        if (chapter.AllImagesUploaded)
-        {
-            chapter.ErrorMessage = null;
-            chapter.State = ComicChapterUploadState.Ready;
-            return;
-        }
-
         var failedNames = chapter.Images
             .Where(image => image.State == ComicImageUploadState.Failed)
             .Select(image => image.FileName)
             .ToArray();
-        chapter.ErrorMessage = failedNames.Length == 0
-            ? "没有支持的图片。"
-            : $"以下图片上传失败：{string.Join("、", failedNames)}";
-        chapter.State = ComicChapterUploadState.Failed;
+        if (failedNames.Length > 0)
+        {
+            chapter.ErrorMessage =
+                $"以下图片上传失败：{string.Join("、", failedNames)}";
+            chapter.State = ComicChapterUploadState.Failed;
+            return;
+        }
+
+        if (chapter.HasSelectionError)
+        {
+            chapter.ErrorMessage = null;
+            chapter.State = ComicChapterUploadState.Failed;
+            return;
+        }
+
+        if (!chapter.HasValidImages)
+        {
+            chapter.ErrorMessage = "没有支持的图片。";
+            chapter.State = ComicChapterUploadState.Failed;
+            return;
+        }
+
+        chapter.ErrorMessage = null;
+        if (chapter.AllImagesUploaded)
+        {
+            chapter.State = ComicChapterUploadState.Ready;
+            return;
+        }
+
+        chapter.State = ComicChapterUploadState.Ready;
     }
 
     private void MarkLaterUploadedChaptersWaiting(PendingComicChapter blocker)

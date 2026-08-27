@@ -148,7 +148,8 @@ public sealed class PendingComicChapter : ObservableObject
 {
     private readonly HashSet<PendingComicImage> _observedImages = [];
     private ComicChapterUploadState _state;
-    private string? _errorMessage;
+    private readonly string? _selectionErrorMessage;
+    private string? _operationErrorMessage;
 
     internal PendingComicChapter(
         Guid id,
@@ -161,7 +162,7 @@ public sealed class PendingComicChapter : ObservableObject
         FolderPath = folderPath;
         Title = title;
         Images = new ObservableCollection<PendingComicImage>(images);
-        _errorMessage = errorMessage;
+        _selectionErrorMessage = errorMessage;
         _state = errorMessage is null
             ? ComicChapterUploadState.Ready
             : ComicChapterUploadState.Failed;
@@ -180,6 +181,10 @@ public sealed class PendingComicChapter : ObservableObject
 
     public ObservableCollection<PendingComicImage> Images { get; }
 
+    public string? SelectionErrorMessage => _selectionErrorMessage;
+
+    public bool HasSelectionError => SelectionErrorMessage is not null;
+
     public ComicChapterUploadState State
     {
         get => _state;
@@ -195,8 +200,21 @@ public sealed class PendingComicChapter : ObservableObject
 
     public string? ErrorMessage
     {
-        get => _errorMessage;
-        internal set => SetProperty(ref _errorMessage, value);
+        get => _operationErrorMessage ?? SelectionErrorMessage;
+        internal set
+        {
+            if (_operationErrorMessage == value)
+            {
+                return;
+            }
+
+            var previous = ErrorMessage;
+            _operationErrorMessage = value;
+            if (previous != ErrorMessage)
+            {
+                OnPropertyChanged();
+            }
+        }
     }
 
     public bool HasValidImages => Images.Count > 0;
@@ -207,6 +225,7 @@ public sealed class PendingComicChapter : ObservableObject
 
     public bool CanRetryCreate =>
         State == ComicChapterUploadState.Failed
+        && !HasSelectionError
         && AllImagesUploaded;
 
     public string StatusText => State switch
