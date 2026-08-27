@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using NovelM_App.Presentation.Publishing;
 
@@ -658,33 +657,19 @@ public sealed class PublishingPageTests
 
     private static string ReadPageSource()
     {
-        var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
-        var pagePath = Path.GetFullPath(Path.Combine(
-            testDirectory,
-            "..",
-            "..",
-            "..",
-            "src",
-            "NovelM.App",
-            "Presentation",
-            "Publishing",
-            "PublishingPage.xaml.cs"));
+        var pagePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestSources",
+            "PublishingPage.xaml.cs");
         return File.ReadAllText(pagePath);
     }
 
     private static XDocument ReadXamlDocument()
     {
-        var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
-        var xamlPath = Path.GetFullPath(Path.Combine(
-            testDirectory,
-            "..",
-            "..",
-            "..",
-            "src",
-            "NovelM.App",
-            "Presentation",
-            "Publishing",
-            "PublishingPage.xaml"));
+        var xamlPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestSources",
+            "PublishingPage.xaml");
         return XDocument.Load(xamlPath, LoadOptions.PreserveWhitespace);
     }
 
@@ -900,6 +885,4 @@ public sealed class PublishingPageTests
         }
     }
 
-    private static string CurrentSourceFile(
-        [CallerFilePath] string sourceFile = "") => sourceFile;
 }

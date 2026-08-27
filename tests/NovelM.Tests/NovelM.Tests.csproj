@@ -27,4 +27,13 @@
     <ProjectReference Include="..\..\src\NovelM.App\NovelM.App.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\src\NovelM.App\Presentation\Publishing\PublishingPage.xaml"
+             Link="TestSources\PublishingPage.xaml"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\NovelM.App\Presentation\Publishing\PublishingPage.xaml.cs"
+             Link="TestSources\PublishingPage.xaml.cs"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
