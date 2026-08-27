@@ -723,9 +723,12 @@ public sealed partial class PublishingPage : Page
                 .Select(folder => folder.Path)
                 .ToArray();
             var selections = await Task.Run(
-                    () => folderPaths.Select(ScanChapterFolder).ToArray(),
-                    cancellation.Value)
-                .WaitAsync(cancellation.Value);
+                () => folderPaths.Select(path =>
+                {
+                    cancellation.Value.ThrowIfCancellationRequested();
+                    return ScanChapterFolder(path, cancellation.Value);
+                }).ToArray(),
+                cancellation.Value);
             if (ReferenceEquals(_pageCancellation, pageCancellation)
                 && Editor.BookId == bookId)
             {
@@ -1522,7 +1525,9 @@ public sealed partial class PublishingPage : Page
     {
         UnbindPendingImage(image);
         image.Source = null;
-        if (dataContext is not PendingComicImage item)
+        if (!_isLoaded
+            || !image.IsLoaded
+            || dataContext is not PendingComicImage item)
         {
             return;
         }
@@ -1563,7 +1568,7 @@ public sealed partial class PublishingPage : Page
         });
     }
 
-    private static async Task UpdatePendingImageAsync(
+    private async Task UpdatePendingImageAsync(
         Image image,
         object? dataContext)
     {
@@ -1595,12 +1600,39 @@ public sealed partial class PublishingPage : Page
         }
     }
 
-    private static bool IsCurrentPendingImagePreview(
+    private bool IsCurrentPendingImagePreview(
         Image image,
         PendingComicImage item,
-        string filePath) =>
-        ReferenceEquals(image.DataContext, item)
-        && string.Equals(item.FilePath, filePath, StringComparison.OrdinalIgnoreCase);
+        string filePath)
+    {
+        var bindingMatches = _pendingImageBindings.TryGetValue(
+            image,
+            out var boundItem)
+            && ReferenceEquals(boundItem, item);
+        return IsPendingImagePreviewCurrent(
+            _isLoaded,
+            image.IsLoaded,
+            bindingMatches,
+            ReferenceEquals(image.DataContext, item),
+            item.FilePath,
+            filePath);
+    }
+
+    internal static bool IsPendingImagePreviewCurrent(
+        bool isPageLoaded,
+        bool isImageLoaded,
+        bool bindingMatches,
+        bool dataContextMatches,
+        string currentFilePath,
+        string capturedFilePath) =>
+        isPageLoaded
+        && isImageLoaded
+        && bindingMatches
+        && dataContextMatches
+        && string.Equals(
+            currentFilePath,
+            capturedFilePath,
+            StringComparison.OrdinalIgnoreCase);
 
     private static BitmapImage? CreateHttpImage(string? source)
     {
@@ -1629,23 +1661,41 @@ public sealed partial class PublishingPage : Page
         return Convert.ToInt64(Math.Round(value));
     }
 
-    internal static LocalComicChapterSelection ScanChapterFolder(string folderPath)
+    internal static LocalComicChapterSelection ScanChapterFolder(
+        string folderPath,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var title = GetChapterFolderTitle(folderPath);
         try
         {
-            var images = Directory
-                .EnumerateFiles(folderPath, "*", SearchOption.TopDirectoryOnly)
-                .Where(path => ImageFileTypeSet.Contains(Path.GetExtension(path)))
+            var imagePaths = new List<string>();
+            foreach (var path in Directory.EnumerateFiles(
+                         folderPath,
+                         "*",
+                         SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ImageFileTypeSet.Contains(Path.GetExtension(path)))
+                {
+                    imagePaths.Add(path);
+                }
+            }
+
+            var images = imagePaths
                 .OrderBy(
                     path => Path.GetFileName(path),
                     NaturalNameComparer.Instance)
                 .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
                 .ThenBy(path => Path.GetFileName(path), StringComparer.Ordinal)
-                .Select(path => new LocalImageSource(
-                    Guid.NewGuid(),
-                    Path.GetFileName(path),
-                    path))
+                .Select(path =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new LocalImageSource(
+                        Guid.NewGuid(),
+                        Path.GetFileName(path),
+                        path);
+                })
                 .ToArray();
             return new LocalComicChapterSelection(
                 folderPath,

@@ -180,6 +180,18 @@ public sealed class PublishingPageTests
     }
 
     [TestMethod]
+    public void ScanChapterFolder_PreCanceledTokenThrows()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.ThrowsExactly<OperationCanceledException>(() =>
+            PublishingPage.ScanChapterFolder(
+                Path.Combine(Path.GetTempPath(), $"novelm-canceled-{Guid.NewGuid():N}"),
+                cancellation.Token));
+    }
+
+    [TestMethod]
     public void GetChapterFolderTitle_RootPathsReturnNonEmptyNames()
     {
         Assert.AreEqual("C:", PublishingPage.GetChapterFolderTitle(@"C:\"));
@@ -262,8 +274,13 @@ public sealed class PublishingPageTests
         StringAssert.Contains(handler, "var folderPaths = folders");
         StringAssert.Contains(handler, ".Select(folder => folder.Path)");
         StringAssert.Contains(handler, "await Task.Run(");
-        StringAssert.Contains(handler, ".Select(ScanChapterFolder)");
-        StringAssert.Contains(handler, "cancellation.Value");
+        StringAssert.Contains(handler, ".Select(path =>");
+        StringAssert.Contains(
+            handler,
+            "cancellation.Value.ThrowIfCancellationRequested();");
+        StringAssert.Contains(
+            handler,
+            "ScanChapterFolder(path, cancellation.Value)");
         StringAssert.Contains(
             handler,
             "ReferenceEquals(_pageCancellation, pageCancellation)");
@@ -278,7 +295,7 @@ public sealed class PublishingPageTests
         var pageSource = ReadPageSource();
         var previewHelper = ExtractSourceRange(
             pageSource,
-            "private static async Task UpdatePendingImageAsync(",
+            "private async Task UpdatePendingImageAsync(",
             "private static BitmapImage? CreateHttpImage(");
 
         StringAssert.Contains(previewHelper, "var filePath = item.FilePath;");
@@ -320,7 +337,11 @@ public sealed class PublishingPageTests
         var propertyHandler = ExtractSourceRange(
             pageSource,
             "private void PendingImage_PropertyChanged(",
-            "private static async Task UpdatePendingImageAsync(");
+            "private async Task UpdatePendingImageAsync(");
+        var currentGuard = ExtractSourceRange(
+            pageSource,
+            "private bool IsCurrentPendingImagePreview(",
+            "internal static bool IsPendingImagePreviewCurrent(");
         var pageUnloadedHandler = ExtractSourceRange(
             pageSource,
             "private void PublishingPage_Unloaded(",
@@ -330,6 +351,11 @@ public sealed class PublishingPageTests
         StringAssert.Contains(dataContextHandler, "BindPendingImage(");
         StringAssert.Contains(unloadedHandler, "UnbindPendingImage(");
         StringAssert.Contains(bindHelper, "UnbindPendingImage(image);");
+        StringAssert.Contains(bindHelper, "!_isLoaded");
+        StringAssert.Contains(bindHelper, "!image.IsLoaded");
+        StringAssert.Contains(
+            bindHelper,
+            "dataContext is not PendingComicImage item");
         StringAssert.Contains(
             bindHelper,
             "item.PropertyChanged += PendingImage_PropertyChanged;");
@@ -343,6 +369,42 @@ public sealed class PublishingPageTests
             propertyHandler,
             "UpdatePendingImageAsync(image, item)");
         StringAssert.Contains(pageUnloadedHandler, "UnbindPendingImage(image);");
+        StringAssert.Contains(currentGuard, "_pendingImageBindings.TryGetValue(");
+        StringAssert.Contains(currentGuard, "ReferenceEquals(boundItem, item)");
+        StringAssert.Contains(currentGuard, "_isLoaded");
+        StringAssert.Contains(currentGuard, "image.IsLoaded");
+        StringAssert.Contains(
+            currentGuard,
+            "ReferenceEquals(image.DataContext, item)");
+    }
+
+    [TestMethod]
+    public void IsPendingImagePreviewCurrent_RequiresActiveLifecycleBindingAndPath()
+    {
+        const string originalPath = @"C:\images\1.jpg";
+
+        Assert.IsTrue(PublishingPage.IsPendingImagePreviewCurrent(
+            true,
+            true,
+            true,
+            true,
+            originalPath,
+            @"c:\IMAGES\1.jpg"));
+        Assert.IsFalse(PublishingPage.IsPendingImagePreviewCurrent(
+            false, true, true, true, originalPath, originalPath));
+        Assert.IsFalse(PublishingPage.IsPendingImagePreviewCurrent(
+            true, false, true, true, originalPath, originalPath));
+        Assert.IsFalse(PublishingPage.IsPendingImagePreviewCurrent(
+            true, true, false, true, originalPath, originalPath));
+        Assert.IsFalse(PublishingPage.IsPendingImagePreviewCurrent(
+            true, true, true, false, originalPath, originalPath));
+        Assert.IsFalse(PublishingPage.IsPendingImagePreviewCurrent(
+            true,
+            true,
+            true,
+            true,
+            originalPath,
+            @"C:\images\2.jpg"));
     }
 
     private static string ReadPageSource()
