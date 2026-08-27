@@ -19,7 +19,7 @@ UninstallDisplayIcon={app}\AppIcon.ico
 OutputBaseFilename=NovelM-{#MyAppVersion}-setup
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "Languages\ChineseSimplified.isl"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "data\*;runtime\*"
