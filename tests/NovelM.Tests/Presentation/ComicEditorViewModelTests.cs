@@ -1430,6 +1430,23 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task RemoveBatchChapter_CompletedChapterIsNotRemoved()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第1章", Source("1.jpg"))]);
+        var chapter = viewModel.PendingBatchChapters.Single();
+        chapter.State = ComicChapterUploadState.Completed;
+
+        await viewModel.RemoveBatchChapterAsync(
+            chapter.Id,
+            CancellationToken.None);
+
+        Assert.IsFalse(chapter.CanRemove);
+        Assert.AreSame(chapter, viewModel.PendingBatchChapters.Single());
+    }
+
+    [TestMethod]
     public async Task RemoveEarliestReadyBatchChapter_ResumesWaitingChapter()
     {
         var service = LoadedService();
@@ -1701,6 +1718,7 @@ public sealed class ComicEditorViewModelTests
 
         Assert.AreEqual(ComicChapterUploadState.Ready, chapter.State);
         Assert.AreEqual("待上传", chapter.StatusText);
+        Assert.IsTrue(chapter.CanRemove);
         Assert.IsFalse(chapter.HasValidImages);
         Assert.IsFalse(chapter.AllImagesUploaded);
         Assert.IsFalse(chapter.CanRetryCreate);
@@ -1736,6 +1754,34 @@ public sealed class ComicEditorViewModelTests
         changedProperties.Clear();
         image.Replace("replacement.jpg", @"C:\images\replacement.jpg");
         Assert.AreEqual(0, changedProperties.Count);
+    }
+
+    [TestMethod]
+    public void PendingComicChapter_CanRemoveChangesAndNotifiesWithState()
+    {
+        var chapter = new PendingComicChapter(
+            Guid.NewGuid(),
+            @"C:\chapters\第2章",
+            "第2章",
+            [],
+            null);
+        var changedProperties = new List<string?>();
+        chapter.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        chapter.State = ComicChapterUploadState.CreatingChapter;
+
+        Assert.IsTrue(chapter.CanRemove);
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(PendingComicChapter.CanRemove));
+
+        changedProperties.Clear();
+        chapter.State = ComicChapterUploadState.Completed;
+
+        Assert.IsFalse(chapter.CanRemove);
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(PendingComicChapter.CanRemove));
     }
 
     [TestMethod]
@@ -1879,7 +1925,7 @@ public sealed class ComicEditorViewModelTests
     {
         var viewModel = CreateViewModel(LoadedService());
 
-        Assert.AreEqual("图片 0/0，章节 0/0", viewModel.BatchProgressText);
+        Assert.AreEqual("已处理图片 0/0，章节 0/0", viewModel.BatchProgressText);
     }
 
     [TestMethod]
@@ -1900,7 +1946,7 @@ public sealed class ComicEditorViewModelTests
         second.Images[0].Fail("failed");
         first.State = ComicChapterUploadState.Completed;
 
-        Assert.AreEqual("图片 2/4，章节 1/2", viewModel.BatchProgressText);
+        Assert.AreEqual("已处理图片 2/4，章节 1/2", viewModel.BatchProgressText);
     }
 
     [TestMethod]

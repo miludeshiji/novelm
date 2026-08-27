@@ -68,6 +68,7 @@ public sealed class PublishingPageTests
                      ("SelectBatchChapterFoldersButton", "Button", "SelectBatchChapterFoldersButton_Click"),
                      ("PendingBatchChaptersList", "ListView", null),
                      ("UploadBatchChaptersButton", "Button", "UploadBatchChaptersButton_Click"),
+                     ("BatchUploadProgressText", "TextBlock", null),
                      ("SelectChapterImagesButton", "Button", "SelectChapterImagesButton_Click"),
                      ("ClearPendingChapterImagesButton", "Button", "ClearPendingChapterImagesButton_Click"),
                      ("ClearChapterImagesButton", "Button", "ClearChapterImagesButton_Click")
@@ -82,6 +83,15 @@ public sealed class PublishingPageTests
                 AssertAttribute(element, "Click", clickHandler);
             }
         }
+
+        AssertAttribute(
+            FindNamedElement(document, "BatchUploadProgressText"),
+            "Text",
+            "已处理图片 0/0，章节 0/0");
+        AssertAttribute(
+            FindNamedElement(document, "PendingChapterImagesPanel"),
+            "Visibility",
+            "Collapsed");
     }
 
     [TestMethod]
@@ -98,21 +108,28 @@ public sealed class PublishingPageTests
             gridView,
             "viewModels:PendingComicImage");
 
+        AssertPendingImageGridLayout(gridView, imageTemplate);
         AssertPendingImagePreview(imageTemplate);
-        AssertTemplateTextBinding(imageTemplate, "FileName");
         AssertTemplateTextBinding(imageTemplate, "StatusText");
-        AssertTemplateTextBinding(imageTemplate, "ErrorMessage");
         var replaceButton = AssertTemplateButton(
             imageTemplate,
             "ReplacePendingChapterImageButton",
             "ReplacePendingChapterImageButton_Click",
             "CanReplace");
         AssertAttribute(replaceButton, "Content", "重新选择并上传");
-        AssertTemplateButton(
+        AssertAttribute(
+            replaceButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind FileName, Mode=OneWay}");
+        var removeButton = AssertTemplateButton(
             imageTemplate,
             "RemovePendingChapterImageButton",
             "RemovePendingChapterImageButton_Click",
             "CanRemove");
+        AssertAttribute(
+            removeButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind FileName, Mode=OneWay}");
     }
 
     [TestMethod]
@@ -132,34 +149,52 @@ public sealed class PublishingPageTests
         AssertTemplateTextBinding(chapterTemplate, "Title", oneWay: false);
         AssertTemplateTextBinding(chapterTemplate, "StatusText");
         AssertTemplateTextBinding(chapterTemplate, "ErrorMessage");
-        AssertTemplateButton(
+        var retryButton = AssertTemplateButton(
             chapterTemplate,
             "RetryBatchChapterButton",
             "RetryBatchChapterButton_Click",
             "CanRetryCreate");
-        AssertTemplateButton(
+        AssertAttribute(
+            retryButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind Title}");
+        var removeChapterButton = AssertTemplateButton(
             chapterTemplate,
             "RemoveBatchChapterButton",
-            "RemoveBatchChapterButton_Click");
+            "RemoveBatchChapterButton_Click",
+            "CanRemove");
+        AssertAttribute(
+            removeChapterButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind Title}");
 
         var imageTemplate = FindTypedDataTemplate(
             chapterTemplate,
             "viewModels:PendingComicImage");
+        var imageGridView = imageTemplate.Ancestors()
+            .First(element => element.Name.LocalName == "GridView");
+        AssertPendingImageGridLayout(imageGridView, imageTemplate);
         AssertPendingImagePreview(imageTemplate);
-        AssertTemplateTextBinding(imageTemplate, "FileName");
         AssertTemplateTextBinding(imageTemplate, "StatusText");
-        AssertTemplateTextBinding(imageTemplate, "ErrorMessage");
         var replaceButton = AssertTemplateButton(
             imageTemplate,
             "ReplaceBatchImageButton",
             "ReplaceBatchImageButton_Click",
             "CanReplace");
         AssertAttribute(replaceButton, "Content", "重新选择并上传");
-        AssertTemplateButton(
+        AssertAttribute(
+            replaceButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind FileName, Mode=OneWay}");
+        var removeImageButton = AssertTemplateButton(
             imageTemplate,
             "RemoveBatchImageButton",
             "RemoveBatchImageButton_Click",
             "CanRemove");
+        AssertAttribute(
+            removeImageButton,
+            "AutomationProperties.HelpText",
+            "{x:Bind FileName, Mode=OneWay}");
     }
 
     [TestMethod]
@@ -178,6 +213,7 @@ public sealed class PublishingPageTests
             pageSource,
             "private void UpdateViewState()",
             "private string? CurrentNoticeMessage()");
+        var normalizedUpdateViewState = NormalizeWhitespace(updateViewState);
 
         StringAssert.Contains(
             subscribe,
@@ -192,25 +228,25 @@ public sealed class PublishingPageTests
             unsubscribe,
             "Editor.PendingBatchChapters.CollectionChanged -= UploadQueues_CollectionChanged;");
         StringAssert.Contains(
-            updateViewState,
-            "PendingChapterImagesPanel.Visibility = Editor.HasPendingChapterImages");
+            normalizedUpdateViewState,
+            "PendingChapterImagesPanel.Visibility = Editor.HasPendingChapterImages ? Visibility.Visible : Visibility.Collapsed;");
         StringAssert.Contains(
-            updateViewState,
-            "UploadChapterImagesButton.IsEnabled = Editor.CanUploadPendingChapterImages");
+            normalizedUpdateViewState,
+            "UploadChapterImagesButton.IsEnabled = Editor.CanUploadPendingChapterImages && !isBusy;");
         StringAssert.Contains(
-            updateViewState,
-            "ClearPendingChapterImagesButton.IsEnabled = Editor.HasPendingChapterImages");
+            normalizedUpdateViewState,
+            "ClearPendingChapterImagesButton.IsEnabled = Editor.HasPendingChapterImages && Editor.PendingChapterImages.All(item => item.CanRemove) && !isBusy;");
         StringAssert.Contains(
-            updateViewState,
+            normalizedUpdateViewState,
             "SelectBatchChapterFoldersButton.IsEnabled = Editor.IsLoaded && !isBusy;");
         StringAssert.Contains(
-            updateViewState,
+            normalizedUpdateViewState,
             "UploadBatchChaptersButton.IsEnabled = Editor.CanUploadBatchChapters && !isBusy;");
         StringAssert.Contains(
-            updateViewState,
+            normalizedUpdateViewState,
             "BatchUploadProgressText.Text = Editor.BatchProgressText;");
         StringAssert.Contains(
-            updateViewState,
+            normalizedUpdateViewState,
             "SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;");
     }
 
@@ -680,7 +716,56 @@ public sealed class PublishingPageTests
         AssertAttribute(images[0], "Unloaded", "PendingImage_Unloaded");
     }
 
-    private static void AssertTemplateTextBinding(
+    private static void AssertPendingImageGridLayout(
+        XElement gridView,
+        XElement imageTemplate)
+    {
+        AssertAttribute(gridView, "ScrollViewer.VerticalScrollMode", "Auto");
+        AssertAttribute(
+            gridView,
+            "ScrollViewer.VerticalScrollBarVisibility",
+            "Auto");
+        var maxHeight = ParseDoubleAttribute(gridView, "MaxHeight");
+        var itemsWrapGrid = gridView.Descendants()
+            .Single(element => element.Name.LocalName == "ItemsWrapGrid");
+        var itemHeight = ParseDoubleAttribute(itemsWrapGrid, "ItemHeight");
+        var card = OwnTemplateDescendants(imageTemplate)
+            .Single(element => element.Name.LocalName == "Border");
+        var cardHeight = ParseDoubleAttribute(card, "Height");
+        var previewHeight = OwnTemplateDescendants(imageTemplate)
+            .Where(element => element.Name.LocalName == "RowDefinition")
+            .Select(element => (string?)element.Attribute("Height"))
+            .Where(value => double.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out _))
+            .Select(value => double.Parse(value!, CultureInfo.InvariantCulture))
+            .Single();
+
+        Assert.IsTrue(maxHeight >= itemHeight);
+        Assert.IsTrue(itemHeight > cardHeight);
+        Assert.IsTrue(cardHeight <= 340);
+        Assert.IsTrue(cardHeight - previewHeight >= 150);
+        Assert.AreEqual(
+            "1",
+            (string?)AssertTemplateTextBinding(imageTemplate, "FileName")
+                .Attribute("MaxLines"));
+        var errorMaxLines = (string?)AssertTemplateTextBinding(
+                imageTemplate,
+                "ErrorMessage")
+            .Attribute("MaxLines");
+        Assert.IsNotNull(errorMaxLines);
+        Assert.IsTrue(int.Parse(
+            errorMaxLines,
+            CultureInfo.InvariantCulture) >= 2);
+        Assert.AreEqual(
+            2,
+            OwnTemplateDescendants(imageTemplate).Count(element =>
+                element.Name.LocalName == "Button"));
+    }
+
+    private static XElement AssertTemplateTextBinding(
         XElement template,
         string propertyName,
         bool oneWay = true)
@@ -688,11 +773,15 @@ public sealed class PublishingPageTests
         var expectedBinding = oneWay
             ? $"{{x:Bind {propertyName}, Mode=OneWay}}"
             : $"{{x:Bind {propertyName}}}";
-        Assert.IsTrue(
-            OwnTemplateDescendants(template).Any(element =>
+        var matches = OwnTemplateDescendants(template).Where(element =>
                 element.Name.LocalName == "TextBlock"
-                && (string?)element.Attribute("Text") == expectedBinding),
+                && (string?)element.Attribute("Text") == expectedBinding)
+            .ToArray();
+        Assert.AreEqual(
+            1,
+            matches.Length,
             $"Missing TextBlock binding '{expectedBinding}' in the '{(string?)template.Attribute(XamlNamespace + "DataType")}' template body.");
+        return matches.Single();
     }
 
     private static XElement AssertTemplateButton(
@@ -714,6 +803,26 @@ public sealed class PublishingPageTests
 
         return button;
     }
+
+    private static double ParseDoubleAttribute(
+        XElement element,
+        string attributeName)
+    {
+        var value = (string?)element.Attribute(attributeName);
+        Assert.IsTrue(
+            double.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed),
+            $"Expected numeric {attributeName} on '{element.Name.LocalName}'.");
+        return parsed;
+    }
+
+    private static string NormalizeWhitespace(string source) =>
+        string.Join(
+            " ",
+            source.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string ExtractSourceRange(
         string source,

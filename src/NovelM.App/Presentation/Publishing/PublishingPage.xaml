@@ -519,7 +519,7 @@
                                                     Grid.Column="2"
                                                     VerticalAlignment="Center"
                                                     AutomationProperties.LiveSetting="Polite"
-                                                    Text="图片 0/0，章节 0/0" />
+                                                    Text="已处理图片 0/0，章节 0/0" />
                                             </Grid>
                                             <ListView
                                                 x:Name="PendingBatchChaptersList"
@@ -555,6 +555,7 @@
                                                                     <Button
                                                                         x:Name="RetryBatchChapterButton"
                                                                         Grid.Column="2"
+                                                                        AutomationProperties.HelpText="{x:Bind Title}"
                                                                         AutomationProperties.Name="重试创建章节"
                                                                         Click="RetryBatchChapterButton_Click"
                                                                         Content="重试创建"
@@ -562,23 +563,27 @@
                                                                     <Button
                                                                         x:Name="RemoveBatchChapterButton"
                                                                         Grid.Column="3"
+                                                                        AutomationProperties.HelpText="{x:Bind Title}"
                                                                         AutomationProperties.Name="移除批量章节"
                                                                         Click="RemoveBatchChapterButton_Click"
-                                                                        Content="移除章节" />
+                                                                        Content="移除章节"
+                                                                        IsEnabled="{x:Bind CanRemove, Mode=OneWay}" />
                                                                 </Grid>
                                                                 <TextBlock
                                                                     Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                                                                     Text="{x:Bind ErrorMessage, Mode=OneWay}"
                                                                     TextWrapping="Wrap" />
                                                                 <GridView
-                                                                    MaxHeight="320"
+                                                                    MaxHeight="340"
                                                                     AutomationProperties.Name="批量章节待上传图片"
                                                                     ItemsSource="{x:Bind Images, Mode=OneWay}"
+                                                                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                    ScrollViewer.VerticalScrollMode="Auto"
                                                                     SelectionMode="None">
                                                                     <GridView.ItemsPanel>
                                                                         <ItemsPanelTemplate>
                                                                             <ItemsWrapGrid
-                                                                                ItemHeight="324"
+                                                                                ItemHeight="308"
                                                                                 ItemWidth="188"
                                                                                 Orientation="Horizontal" />
                                                                         </ItemsPanelTemplate>
@@ -587,7 +592,7 @@
                                                                         <DataTemplate x:DataType="viewModels:PendingComicImage">
                                                                             <Border
                                                                                 Width="180"
-                                                                                Height="316"
+                                                                                Height="300"
                                                                                 Padding="6"
                                                                                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                                                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -595,7 +600,7 @@
                                                                                 CornerRadius="6">
                                                                                 <Grid RowSpacing="4">
                                                                                     <Grid.RowDefinitions>
-                                                                                        <RowDefinition Height="150" />
+                                                                                        <RowDefinition Height="132" />
                                                                                         <RowDefinition Height="Auto" />
                                                                                         <RowDefinition Height="Auto" />
                                                                                         <RowDefinition Height="*" />
@@ -609,7 +614,7 @@
                                                                                     <TextBlock
                                                                                         Grid.Row="1"
                                                                                         FontSize="11"
-                                                                                        MaxLines="2"
+                                                                                        MaxLines="1"
                                                                                         Text="{x:Bind FileName, Mode=OneWay}"
                                                                                         TextTrimming="CharacterEllipsis"
                                                                                         TextWrapping="Wrap" />
@@ -630,6 +635,7 @@
                                                                                         <Button
                                                                                             x:Name="ReplaceBatchImageButton"
                                                                                             HorizontalAlignment="Stretch"
+                                                                                            AutomationProperties.HelpText="{x:Bind FileName, Mode=OneWay}"
                                                                                             AutomationProperties.Name="重新选择并上传失败图片"
                                                                                             Click="ReplaceBatchImageButton_Click"
                                                                                             Content="重新选择并上传"
@@ -637,6 +643,7 @@
                                                                                         <Button
                                                                                             x:Name="RemoveBatchImageButton"
                                                                                             HorizontalAlignment="Stretch"
+                                                                                            AutomationProperties.HelpText="{x:Bind FileName, Mode=OneWay}"
                                                                                             AutomationProperties.Name="移除批量章节图片"
                                                                                             Click="RemoveBatchImageButton_Click"
                                                                                             Content="移除"
@@ -721,13 +728,16 @@
                                             </Grid>
                                             <GridView
                                                 x:Name="PendingChapterImagesGridView"
+                                                MaxHeight="420"
                                                 AutomationProperties.Name="待上传章节图片预览"
                                                 ItemsSource="{x:Bind ViewModel.Editor.PendingChapterImages, Mode=OneWay}"
+                                                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                ScrollViewer.VerticalScrollMode="Auto"
                                                 SelectionMode="None">
                                                 <GridView.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <ItemsWrapGrid
-                                                            ItemHeight="324"
+                                                            ItemHeight="308"
                                                             ItemWidth="188"
                                                             Orientation="Horizontal" />
                                                     </ItemsPanelTemplate>
@@ -736,7 +746,7 @@
                                                     <DataTemplate x:DataType="viewModels:PendingComicImage">
                                                         <Border
                                                             Width="180"
-                                                            Height="316"
+                                                            Height="300"
                                                             Padding="6"
                                                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -744,7 +754,7 @@
                                                             CornerRadius="6">
                                                             <Grid RowSpacing="4">
                                                                 <Grid.RowDefinitions>
-                                                                    <RowDefinition Height="150" />
+                                                                    <RowDefinition Height="132" />
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="Auto" />
                                                                     <RowDefinition Height="*" />
@@ -758,7 +768,7 @@
                                                                 <TextBlock
                                                                     Grid.Row="1"
                                                                     FontSize="11"
-                                                                    MaxLines="2"
+                                                                    MaxLines="1"
                                                                     Text="{x:Bind FileName, Mode=OneWay}"
                                                                     TextTrimming="CharacterEllipsis"
                                                                     TextWrapping="Wrap" />
@@ -779,6 +789,7 @@
                                                                     <Button
                                                                         x:Name="ReplacePendingChapterImageButton"
                                                                         HorizontalAlignment="Stretch"
+                                                                        AutomationProperties.HelpText="{x:Bind FileName, Mode=OneWay}"
                                                                         AutomationProperties.Name="重新选择并上传失败章节图片"
                                                                         Click="ReplacePendingChapterImageButton_Click"
                                                                         Content="重新选择并上传"
@@ -786,6 +797,7 @@
                                                                     <Button
                                                                         x:Name="RemovePendingChapterImageButton"
                                                                         HorizontalAlignment="Stretch"
+                                                                        AutomationProperties.HelpText="{x:Bind FileName, Mode=OneWay}"
                                                                         AutomationProperties.Name="移除待上传章节图片"
                                                                         Click="RemovePendingChapterImageButton_Click"
                                                                         Content="移除"

@@ -34,7 +34,7 @@ public sealed partial class ComicEditorViewModel
                     or ComicImageUploadState.Failed);
             var finishedChapters = PendingBatchChapters.Count(chapter =>
                 chapter.State == ComicChapterUploadState.Completed);
-            return $"图片 {finishedImages}/{images.Length}，章节 {finishedChapters}/{PendingBatchChapters.Count}";
+            return $"已处理图片 {finishedImages}/{images.Length}，章节 {finishedChapters}/{PendingBatchChapters.Count}";
         }
     }
 
@@ -280,9 +280,7 @@ public sealed partial class ComicEditorViewModel
         var chapter = PendingBatchChapters.FirstOrDefault(
             item => item.Id == chapterId);
         if (chapter is null
-            || chapter.State is ComicChapterUploadState.UploadingImages
-                or ComicChapterUploadState.CreatingChapter
-                or ComicChapterUploadState.Completed
+            || !chapter.CanRemove
             || IsUploading
             || IsBusy)
         {

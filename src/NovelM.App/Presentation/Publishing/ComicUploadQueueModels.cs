@@ -194,6 +194,7 @@ public sealed class PendingComicChapter : ObservableObject
             {
                 OnPropertyChanged(nameof(StatusText));
                 OnPropertyChanged(nameof(CanRetryCreate));
+                OnPropertyChanged(nameof(CanRemove));
             }
         }
     }
@@ -227,6 +228,8 @@ public sealed class PendingComicChapter : ObservableObject
         State == ComicChapterUploadState.Failed
         && !HasSelectionError
         && AllImagesUploaded;
+
+    public bool CanRemove => State != ComicChapterUploadState.Completed;
 
     public string StatusText => State switch
     {
