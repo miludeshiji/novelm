@@ -35,12 +35,28 @@ public sealed partial class ComicEditorViewModel
         && !IsBusy
         && !IsUploading;
 
-    public bool CanUploadBatchChapters =>
-        HasPendingBatchChapters
-        && PendingBatchChapters.All(
-            chapter => chapter.HasValidImages && chapter.ErrorMessage is null)
-        && !IsBusy
-        && !IsUploading;
+    public bool CanUploadBatchChapters
+    {
+        get
+        {
+            if (!HasPendingBatchChapters || IsBusy || IsUploading)
+            {
+                return false;
+            }
+
+            var incomplete = PendingBatchChapters
+                .Where(chapter => chapter.State != ComicChapterUploadState.Completed)
+                .ToArray();
+            return incomplete.Any(chapter => chapter.Images.Any(
+                       image => image.State == ComicImageUploadState.Pending))
+                || incomplete.FirstOrDefault() is
+                {
+                    AllImagesUploaded: true,
+                    State: ComicChapterUploadState.Ready
+                        or ComicChapterUploadState.WaitingForPreviousChapter
+                };
+        }
+    }
 
     public void StageChapterImages(IReadOnlyList<LocalImageSource> sources)
     {
@@ -178,7 +194,6 @@ public sealed partial class ComicEditorViewModel
                     .ToArray();
                 if (targets.Length == 0)
                 {
-                    UpdateBatchChapterAfterImageUpload(chapter);
                     continue;
                 }
 
@@ -258,8 +273,7 @@ public sealed partial class ComicEditorViewModel
             return Task.CompletedTask;
         }
 
-        var shouldResume = chapter.State is ComicChapterUploadState.Failed
-            or ComicChapterUploadState.WaitingForPreviousChapter;
+        var shouldResume = IsEarliestIncompleteBatchChapter(chapter.Id);
         return RunBatchOperationAsync(async (bookId, generation) =>
         {
             PendingBatchChapters.Remove(chapter);
@@ -289,6 +303,7 @@ public sealed partial class ComicEditorViewModel
             return Task.CompletedTask;
         }
 
+        var shouldResume = IsEarliestIncompleteBatchChapter(chapter.Id);
         return RunBatchOperationAsync(async (bookId, generation) =>
         {
             chapter.Images.Remove(image);
@@ -301,11 +316,16 @@ public sealed partial class ComicEditorViewModel
             else if (chapter.AllImagesUploaded)
             {
                 chapter.ErrorMessage = null;
-                chapter.State = ComicChapterUploadState.Ready;
-                await CreateReadyBatchPrefixAsync(
-                    bookId,
-                    generation,
-                    cancellationToken);
+                chapter.State = shouldResume
+                    ? ComicChapterUploadState.Ready
+                    : ComicChapterUploadState.WaitingForPreviousChapter;
+                if (shouldResume)
+                {
+                    await CreateReadyBatchPrefixAsync(
+                        bookId,
+                        generation,
+                        cancellationToken);
+                }
             }
         });
     }
@@ -317,7 +337,7 @@ public sealed partial class ComicEditorViewModel
         var chapter = PendingBatchChapters.FirstOrDefault(
             item => item.Id == chapterId);
         return chapter is { CanRetryCreate: true }
-            ? ResumeReadyBatchCreationAsync(cancellationToken)
+            ? ResumeReadyBatchCreationAsync(chapter.Id, cancellationToken)
             : Task.CompletedTask;
     }
 
@@ -478,7 +498,8 @@ public sealed partial class ComicEditorViewModel
         }
 
         if (args.PropertyName is nameof(PendingComicChapter.ErrorMessage)
-            or nameof(PendingComicChapter.HasValidImages))
+            or nameof(PendingComicChapter.HasValidImages)
+            or nameof(PendingComicChapter.AllImagesUploaded))
         {
             OnPropertyChanged(nameof(CanUploadBatchChapters));
         }
@@ -654,10 +675,15 @@ public sealed partial class ComicEditorViewModel
     }
 
     private Task ResumeReadyBatchCreationAsync(
+        Guid retryChapterId,
         CancellationToken cancellationToken)
     {
         return RunBatchOperationAsync((bookId, generation) =>
-            CreateReadyBatchPrefixAsync(bookId, generation, cancellationToken));
+            CreateReadyBatchPrefixAsync(
+                bookId,
+                generation,
+                cancellationToken,
+                retryChapterId));
     }
 
     private async Task RunBatchOperationAsync(
@@ -694,11 +720,20 @@ public sealed partial class ComicEditorViewModel
     private async Task CreateReadyBatchPrefixAsync(
         long bookId,
         long generation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? retryChapterId = null)
     {
         foreach (var chapter in PendingBatchChapters.Where(
                      item => item.State != ComicChapterUploadState.Completed))
         {
+            if (chapter.State == ComicChapterUploadState.Failed
+                && chapter.AllImagesUploaded
+                && chapter.Id != retryChapterId)
+            {
+                MarkLaterUploadedChaptersWaiting(chapter);
+                return;
+            }
+
             if (!chapter.HasValidImages || !chapter.AllImagesUploaded)
             {
                 if (!chapter.HasValidImages)
@@ -836,6 +871,11 @@ public sealed partial class ComicEditorViewModel
             }
         }
     }
+
+    private bool IsEarliestIncompleteBatchChapter(Guid chapterId) =>
+        PendingBatchChapters.FirstOrDefault(
+            chapter => chapter.State != ComicChapterUploadState.Completed)?.Id
+        == chapterId;
 
     private static void ApplyImageResults(
         IReadOnlyList<PendingComicImage> targets,

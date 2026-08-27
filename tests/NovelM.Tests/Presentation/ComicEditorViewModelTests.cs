@@ -847,6 +847,45 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task UploadBatchChapters_InvalidFirstChapterStillUploadsLaterImages()
+    {
+        var service = LoadedService();
+        service.UploadHandler = SuccessfulUpload;
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+        [
+            new LocalComicChapterSelection(
+                @"C:\chapters\第1章",
+                "第1章",
+                [],
+                "没有支持的图片。"),
+            Folder("第2章", Source("2.jpg"))
+        ]);
+
+        Assert.IsTrue(viewModel.CanUploadBatchChapters);
+
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+
+        Assert.AreEqual(1, service.UploadCalls);
+        Assert.AreEqual(0, service.CreateChapterCalls);
+        Assert.AreEqual(
+            ComicChapterUploadState.Failed,
+            viewModel.PendingBatchChapters[0].State);
+        Assert.AreEqual(
+            "没有支持的图片。",
+            viewModel.PendingBatchChapters[0].ErrorMessage);
+        Assert.AreEqual(
+            ComicImageUploadState.Uploaded,
+            viewModel.PendingBatchChapters[1].Images.Single().State);
+        Assert.AreEqual(
+            ComicChapterUploadState.WaitingForPreviousChapter,
+            viewModel.PendingBatchChapters[1].State);
+        Assert.IsFalse(viewModel.CanUploadBatchChapters);
+        Assert.IsNull(viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
     public async Task ReplaceFailedBatchImage_CreatesReadyChaptersInOrderWithoutReuploadingLaterChapter()
     {
         var service = LoadedService();
@@ -1033,6 +1072,32 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task UploadBatchChapters_NewLaterImagesDoNotImplicitlyRetryEarlierFailedCreation()
+    {
+        var service = LoadedService();
+        service.UploadHandler = SuccessfulUpload;
+        service.CreateChapterHandler = (_, _, _, _) =>
+            Task.FromException<CreateChapterResult>(
+                new AppException(AppErrorKind.Transport, "create failed"));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第1章", Source("1.jpg"))]);
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("2.jpg"))]);
+
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+
+        Assert.AreEqual(2, service.UploadCalls);
+        Assert.AreEqual(1, service.CreateChapterCalls);
+        Assert.AreEqual(
+            ComicChapterUploadState.Failed,
+            viewModel.PendingBatchChapters[0].State);
+        Assert.AreEqual(
+            ComicChapterUploadState.WaitingForPreviousChapter,
+            viewModel.PendingBatchChapters[1].State);
+    }
+
+    [TestMethod]
     public async Task RemoveBlockingBatchChapter_ResumesReadyPrefix()
     {
         var service = LoadedService();
@@ -1062,6 +1127,70 @@ public sealed class ComicEditorViewModelTests
         Assert.AreEqual("第2章", service.CreatedChapterDrafts.Single().Title);
         Assert.AreEqual(ComicChapterUploadState.Completed, ready.State);
         Assert.IsFalse(viewModel.HasPendingBatchChapters);
+    }
+
+    [TestMethod]
+    public async Task RemoveEarliestReadyBatchChapter_ResumesWaitingChapter()
+    {
+        var service = LoadedService();
+        service.CreateChapterHandler = (_, sortNum, draft, _) => Task.FromResult(
+            new CreateChapterResult(
+                88,
+                [.. Details().Chapters, new ComicChapterSummary(88, sortNum, draft.Title)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+        [
+            Folder("第1章", Source("1.jpg")),
+            Folder("第2章", Source("2.jpg"))
+        ]);
+        var earliest = viewModel.PendingBatchChapters[0];
+        earliest.Images.Single().Complete("https://i/1.jpg");
+        earliest.State = ComicChapterUploadState.Ready;
+        var waiting = viewModel.PendingBatchChapters[1];
+        waiting.Images.Single().Complete("https://i/2.jpg");
+        waiting.State = ComicChapterUploadState.WaitingForPreviousChapter;
+
+        await viewModel.RemoveBatchChapterAsync(
+            earliest.Id,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, service.CreateChapterCalls);
+        Assert.AreEqual("第2章", service.CreatedChapterDrafts.Single().Title);
+        Assert.AreEqual(ComicChapterUploadState.Completed, waiting.State);
+    }
+
+    [TestMethod]
+    public async Task RemoveLaterWaitingBatchChapter_DoesNotRetryEarlierFailedCreation()
+    {
+        var createAttempt = 0;
+        var service = LoadedService();
+        service.UploadHandler = SuccessfulUpload;
+        service.CreateChapterHandler = (_, sortNum, draft, _) =>
+            ++createAttempt == 1
+                ? Task.FromException<CreateChapterResult>(
+                    new AppException(AppErrorKind.Transport, "create failed"))
+                : Task.FromResult(new CreateChapterResult(
+                    88,
+                    [.. Details().Chapters, new ComicChapterSummary(88, sortNum, draft.Title)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+        [
+            Folder("第1章", Source("1.jpg")),
+            Folder("第2章", Source("2.jpg"))
+        ]);
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+        var later = viewModel.PendingBatchChapters[1];
+
+        await viewModel.RemoveBatchChapterAsync(
+            later.Id,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, service.CreateChapterCalls);
+        Assert.AreEqual(
+            ComicChapterUploadState.Failed,
+            viewModel.PendingBatchChapters.Single().State);
     }
 
     [TestMethod]
@@ -1103,6 +1232,52 @@ public sealed class ComicEditorViewModelTests
         Assert.AreEqual(ComicChapterUploadState.Failed, emptyChapter.State);
         Assert.AreEqual("没有支持的图片。", emptyChapter.ErrorMessage);
         Assert.AreEqual(0, service.CreateChapterCalls);
+    }
+
+    [TestMethod]
+    public async Task RemoveLaterBatchImage_DoesNotRetryEarlierFailedCreation()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                sources.Where(source => source.FileName != "bad2.jpg")
+                    .Select(source => new UploadedImage(
+                        source.FileName,
+                        $"https://i/{source.FileName}",
+                        source.Id))
+                    .ToArray(),
+                sources.Where(source => source.FileName == "bad2.jpg")
+                    .Select(source => new FailedImage(
+                        source.FileName,
+                        "failed",
+                        source.Id))
+                    .ToArray()));
+        service.CreateChapterHandler = (_, _, _, _) =>
+            Task.FromException<CreateChapterResult>(
+                new AppException(AppErrorKind.Transport, "create failed"));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+        [
+            Folder("第1章", Source("1.jpg")),
+            Folder("第2章", Source("2.jpg"), Source("bad2.jpg"))
+        ]);
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+        var later = viewModel.PendingBatchChapters[1];
+        var failedImage = later.Images.Single(
+            image => image.State == ComicImageUploadState.Failed);
+
+        await viewModel.RemoveBatchImageAsync(
+            failedImage.Id,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, service.CreateChapterCalls);
+        Assert.AreEqual(
+            ComicChapterUploadState.Failed,
+            viewModel.PendingBatchChapters[0].State);
+        Assert.AreEqual(
+            ComicChapterUploadState.WaitingForPreviousChapter,
+            later.State);
     }
 
     [TestMethod]
