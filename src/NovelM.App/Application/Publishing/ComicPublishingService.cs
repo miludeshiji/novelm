@@ -309,6 +309,10 @@ public sealed class ComicPublishingService : IComicPublishingService
             {
                 throw;
             }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
             catch (Exception exception)
             {
                 failures[index] = new FailedImage(
