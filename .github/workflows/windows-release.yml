@@ -1,14 +1,16 @@
-name: Windows Build and Release
+name: Windows Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
@@ -16,44 +18,60 @@ env:
 
 jobs:
   build:
+    name: Build Release (Windows x64)
     runs-on: windows-2025
+    timeout-minutes: 30
+
     outputs:
       artifact_name: ${{ steps.metadata.outputs.artifact_name }}
       zip_name: ${{ steps.metadata.outputs.zip_name }}
       installer_name: ${{ steps.metadata.outputs.installer_name }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
 
-      - name: Resolve and validate release metadata
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "Release tag '$env:GITHUB_REF_NAME' must match v<major>.<minor>.<patch>, for example v1.0.0."
+          }
+
+          Write-Host "Release tag: $env:GITHUB_REF_NAME"
+          Write-Host "Release commit: $env:GITHUB_SHA"
+
+      - name: Verify release commit is on main
+        shell: pwsh
+        run: |
+          git fetch origin main:refs/remotes/origin/main --no-tags
+
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release commit $env:GITHUB_SHA is not contained in the main branch."
+          }
+
+          Write-Host "Release commit is contained in main."
+
+      - name: Resolve release metadata
         id: metadata
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            if ($env:GITHUB_REF_NAME -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
-              throw "Release tag '$env:GITHUB_REF_NAME' must match v<major>.<minor>.<patch>."
-            }
+          $appVersion = $env:GITHUB_REF_NAME.Substring(1)
 
-            $appVersion = $env:GITHUB_REF_NAME.Substring(1)
-            $assetLabel = $env:GITHUB_REF_NAME
-          }
-          elseif ($env:GITHUB_REF_NAME -eq 'main') {
-            $appVersion = "0.0.0-ci.$env:GITHUB_RUN_NUMBER"
-            $assetLabel = "ci-$env:GITHUB_RUN_NUMBER"
-          }
-          else {
-            throw "Unsupported ref '$env:GITHUB_REF_NAME'."
-          }
-
-          $artifactName = "NovelM-$assetLabel-win-x64"
+          $artifactName = "NovelM-$env:GITHUB_REF_NAME-win-x64"
           $zipName = "$artifactName.zip"
           $installerName = "$artifactName-setup.exe"
 
           "APP_VERSION=$appVersion" >> $env:GITHUB_ENV
-          "ASSET_LABEL=$assetLabel" >> $env:GITHUB_ENV
           "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_ENV
           "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
           "INSTALLER_NAME=$installerName" >> $env:GITHUB_ENV
@@ -62,24 +80,48 @@ jobs:
           "zip_name=$zipName" >> $env:GITHUB_OUTPUT
           "installer_name=$installerName" >> $env:GITHUB_OUTPUT
 
+          Write-Host "App version: $appVersion"
+          Write-Host "Artifact: $artifactName"
+          Write-Host "ZIP: $zipName"
+          Write-Host "Installer: $installerName"
+
       - name: Restore
         shell: pwsh
-        run: dotnet restore NovelM.sln --runtime win-x64 -p:Platform=x64 -m:1 -nr:false
+        run: |
+          dotnet restore NovelM.sln `
+            --runtime win-x64 `
+            -p:Platform=x64 `
+            -m:1 `
+            -nr:false
 
       - name: Ensure Windows App Runtime
         shell: pwsh
         run: |
           $healthyRuntime = Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.2' |
-            Where-Object { $_.Architecture -eq 'X64' -and $_.Status -eq 'Ok' -and [Version]$_.Version -ge [Version]'2.4.0.0' }
+            Where-Object {
+              $_.Architecture -eq 'X64' -and
+              $_.Status -eq 'Ok' -and
+              [Version]$_.Version -ge [Version]'2.4.0.0'
+            }
+
           if (-not $healthyRuntime) {
             $runtimeInstaller = Join-Path $env:RUNNER_TEMP 'windowsappruntimeinstall-x64.exe'
-            Invoke-WebRequest -Uri 'https://aka.ms/windowsappsdk/2.4/2.4.0/windowsappruntimeinstall-x64.exe' -OutFile $runtimeInstaller
+
+            Invoke-WebRequest `
+              -Uri 'https://aka.ms/windowsappsdk/2.4/2.4.0/windowsappruntimeinstall-x64.exe' `
+              -OutFile $runtimeInstaller
+
             $expectedRuntimeSha256 = '851C35B0B0A59CE4C55F9171F601193322FC3413143B0DC3390EA11E14CFA7FC'
-            $actualRuntimeSha256 = (Get-FileHash -LiteralPath $runtimeInstaller -Algorithm SHA256).Hash
+            $actualRuntimeSha256 = (
+              Get-FileHash -LiteralPath $runtimeInstaller -Algorithm SHA256
+            ).Hash
+
             if ($actualRuntimeSha256 -cne $expectedRuntimeSha256) {
               throw "Windows App Runtime SHA256 mismatch. Expected $expectedRuntimeSha256, got $actualRuntimeSha256."
             }
+
             & $runtimeInstaller --quiet
+
             if ($LASTEXITCODE -ne 0) {
               throw "Windows App Runtime installation failed with exit code $LASTEXITCODE."
             }
@@ -87,23 +129,50 @@ jobs:
 
       - name: Test
         shell: pwsh
-        run: dotnet test NovelM.sln -c Release -p:Platform=x64 --no-restore --disable-build-servers -m:1 -nr:false --verbosity minimal
+        run: |
+          dotnet test NovelM.sln `
+            -c Release `
+            -p:Platform=x64 `
+            --no-restore `
+            --disable-build-servers `
+            -m:1 `
+            -nr:false `
+            --verbosity minimal
 
-      - name: Publish framework-dependent application
+      - name: Publish application
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:RUNNER_TEMP 'NovelM-publish'
-          dotnet publish src\NovelM.App\NovelM.App.csproj -c Release -r win-x64 -p:Platform=x64 --self-contained false -p:WindowsAppSDKSelfContained=false -p:Version=$env:APP_VERSION -o $publishDir --no-restore --disable-build-servers -m:1 -nr:false
+
+          dotnet publish src\NovelM.App\NovelM.App.csproj `
+            -c Release `
+            -r win-x64 `
+            -p:Platform=x64 `
+            --self-contained false `
+            -p:WindowsAppSDKSelfContained=false `
+            -p:Version=$env:APP_VERSION `
+            -p:ContinuousIntegrationBuild=true `
+            -o $publishDir `
+            --no-restore `
+            --disable-build-servers `
+            -m:1 `
+            -nr:false
+
           if ($LASTEXITCODE -ne 0) {
             throw 'dotnet publish failed.'
           }
 
-          if (-not (Test-Path -LiteralPath (Join-Path $publishDir 'NovelM.exe') -PathType Leaf)) {
+          $exePath = Join-Path $publishDir 'NovelM.exe'
+
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
             throw 'Publish output does not contain NovelM.exe at its root.'
           }
+
           foreach ($excludedDirectory in 'data', 'runtime') {
-            if (Test-Path -LiteralPath (Join-Path $publishDir $excludedDirectory) -PathType Container) {
-              throw "Publish output must not contain root $excludedDirectory."
+            $path = Join-Path $publishDir $excludedDirectory
+
+            if (Test-Path -LiteralPath $path -PathType Container) {
+              throw "Publish output must not contain root directory '$excludedDirectory'."
             }
           }
 
@@ -115,10 +184,26 @@ jobs:
           $zipPath = Join-Path $assetsDir $env:ZIP_NAME
           $zipCheckDir = Join-Path $env:RUNNER_TEMP 'NovelM-zip-check'
 
-          New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
-          Compress-Archive -Path (Join-Path $publishDir '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
-          Expand-Archive -LiteralPath $zipPath -DestinationPath $zipCheckDir -Force
-          if (-not (Test-Path -LiteralPath (Join-Path $zipCheckDir 'NovelM.exe') -PathType Leaf)) {
+          New-Item `
+            -ItemType Directory `
+            -Path $assetsDir `
+            -Force |
+            Out-Null
+
+          Compress-Archive `
+            -Path (Join-Path $publishDir '*') `
+            -DestinationPath $zipPath `
+            -CompressionLevel Optimal `
+            -Force
+
+          Expand-Archive `
+            -LiteralPath $zipPath `
+            -DestinationPath $zipCheckDir `
+            -Force
+
+          $zipExe = Join-Path $zipCheckDir 'NovelM.exe'
+
+          if (-not (Test-Path -LiteralPath $zipExe -PathType Leaf)) {
             throw 'ZIP does not contain NovelM.exe at its root.'
           }
 
@@ -127,9 +212,17 @@ jobs:
         run: |
           $publishDir = Join-Path $env:RUNNER_TEMP 'NovelM-publish'
           $assetsDir = Join-Path $env:RUNNER_TEMP 'release-assets'
-          $installerBaseName = [System.IO.Path]::GetFileNameWithoutExtension($env:INSTALLER_NAME)
+
+          $installerBaseName = [System.IO.Path]::GetFileNameWithoutExtension(
+            $env:INSTALLER_NAME
+          )
+
           $installerPath = Join-Path $assetsDir $env:INSTALLER_NAME
-          $compiler = (Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source)
+
+          $compiler = (
+            Get-Command ISCC.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty Source
+          )
 
           if (-not $compiler) {
             foreach ($candidate in @(
@@ -142,14 +235,22 @@ jobs:
               }
             }
           }
+
           if (-not $compiler) {
             throw 'ISCC.exe was not found on PATH or in the supported Inno Setup locations.'
           }
 
-          & $compiler "/DMyAppVersion=$env:APP_VERSION" "/DSourceDir=$publishDir" "/O$assetsDir" "/F$installerBaseName" 'installer\NovelM.iss'
+          & $compiler `
+            "/DMyAppVersion=$env:APP_VERSION" `
+            "/DSourceDir=$publishDir" `
+            "/O$assetsDir" `
+            "/F$installerBaseName" `
+            'installer\NovelM.iss'
+
           if ($LASTEXITCODE -ne 0) {
             throw 'Inno Setup compilation failed.'
           }
+
           if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
             throw "Installer was not created at $installerPath."
           }
@@ -160,43 +261,75 @@ jobs:
           $assetsDir = Join-Path $env:RUNNER_TEMP 'release-assets'
           $installerPath = Join-Path $assetsDir $env:INSTALLER_NAME
           $installDir = Join-Path $env:RUNNER_TEMP 'NovelM-installed'
+
           $installedExe = Join-Path $installDir 'NovelM.exe'
 
-          $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/NORESTART',
-            "/DIR=`"$installDir`""
-          ) -Wait -PassThru
+          $installerProcess = Start-Process `
+            -FilePath $installerPath `
+            -ArgumentList @(
+              '/VERYSILENT',
+              '/SUPPRESSMSGBOXES',
+              '/NORESTART',
+              "/DIR=`"$installDir`""
+            ) `
+            -Wait `
+            -PassThru
+
           if ($installerProcess.ExitCode -ne 0) {
             throw "Installer smoke test failed with exit code $($installerProcess.ExitCode)."
           }
+
           if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
             throw 'Installer smoke test did not install NovelM.exe.'
           }
 
           $dataSentinel = Join-Path $installDir 'data\preserve.txt'
           $runtimeSentinel = Join-Path $installDir 'runtime\preserve.txt'
-          New-Item -ItemType Directory -Path (Split-Path -Parent $dataSentinel) -Force | Out-Null
-          New-Item -ItemType Directory -Path (Split-Path -Parent $runtimeSentinel) -Force | Out-Null
-          Set-Content -LiteralPath $dataSentinel -Value 'preserve'
-          Set-Content -LiteralPath $runtimeSentinel -Value 'preserve'
+
+          New-Item `
+            -ItemType Directory `
+            -Path (Split-Path -Parent $dataSentinel) `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path (Split-Path -Parent $runtimeSentinel) `
+            -Force |
+            Out-Null
+
+          Set-Content `
+            -LiteralPath $dataSentinel `
+            -Value 'preserve'
+
+          Set-Content `
+            -LiteralPath $runtimeSentinel `
+            -Value 'preserve'
 
           $uninstallerPath = Join-Path $installDir 'unins000.exe'
+
           if (-not (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
             throw 'Installer smoke test did not create unins000.exe.'
           }
-          $uninstallerProcess = Start-Process -FilePath $uninstallerPath -ArgumentList @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/NORESTART'
-          ) -Wait -PassThru
+
+          $uninstallerProcess = Start-Process `
+            -FilePath $uninstallerPath `
+            -ArgumentList @(
+              '/VERYSILENT',
+              '/SUPPRESSMSGBOXES',
+              '/NORESTART'
+            ) `
+            -Wait `
+            -PassThru
+
           if ($uninstallerProcess.ExitCode -ne 0) {
             throw "Uninstaller smoke test failed with exit code $($uninstallerProcess.ExitCode)."
           }
+
           if (Test-Path -LiteralPath $installedExe -PathType Leaf) {
             throw 'Uninstaller did not remove NovelM.exe.'
           }
+
           foreach ($sentinel in $dataSentinel, $runtimeSentinel) {
             if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
               throw "Uninstaller did not preserve $sentinel."
@@ -207,24 +340,34 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ steps.metadata.outputs.artifact_name }}
+
           path: |
             ${{ runner.temp }}/release-assets/${{ steps.metadata.outputs.zip_name }}
             ${{ runner.temp }}/release-assets/${{ steps.metadata.outputs.installer_name }}
+
           if-no-files-found: error
           compression-level: 0
+          retention-days: 7
 
   release:
-    if: ${{ github.ref_type == 'tag' }}
-    needs: build
+    name: Create GitHub Release
+    needs:
+      - build
+
     runs-on: windows-2025
+    timeout-minutes: 10
+
     permissions:
       contents: write
+
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+
       ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
       ZIP_NAME: ${{ needs.build.outputs.zip_name }}
       INSTALLER_NAME: ${{ needs.build.outputs.installer_name }}
+
     steps:
       - name: Download release assets
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
@@ -236,24 +379,35 @@ jobs:
         shell: pwsh
         run: |
           $assetsDir = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
+
           $zipPath = Join-Path $assetsDir $env:ZIP_NAME
           $installerPath = Join-Path $assetsDir $env:INSTALLER_NAME
+
           foreach ($assetPath in $zipPath, $installerPath) {
             if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
               throw "Expected release asset is missing: $assetPath"
             }
           }
 
-          $generatedNotes = (gh api "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f "tag_name=$env:GITHUB_REF_NAME" --jq .body | Out-String).TrimEnd()
+          $generatedNotes = (
+            gh api `
+              "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" `
+              -f "tag_name=$env:GITHUB_REF_NAME" `
+              --jq .body |
+            Out-String
+          ).TrimEnd()
+
           if ($LASTEXITCODE -ne 0) {
             throw 'GitHub-generated release notes could not be created.'
           }
 
           $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+
           $notes = @"
           ## 安装说明
 
-          - x64 框架依赖版本。
+          - Windows x64。
+          - Framework-dependent 版本。
           - 需要 [.NET 10 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/10.0)。
           - 需要 [Windows App Runtime 2.4 x64](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)。
           - 需要 [VC++ 2015–2022 x64](https://aka.ms/vc14/vc_redist.x64.exe)。
@@ -261,9 +415,19 @@ jobs:
 
           $generatedNotes
           "@
-          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8NoBOM
 
-          gh release create "$env:GITHUB_REF_NAME" $zipPath $installerPath --verify-tag --title "$env:GITHUB_REF_NAME" --notes-file $notesPath
+          Set-Content `
+            -LiteralPath $notesPath `
+            -Value $notes `
+            -Encoding utf8NoBOM
+
+          gh release create "$env:GITHUB_REF_NAME" `
+            $zipPath `
+            $installerPath `
+            --verify-tag `
+            --title "$env:GITHUB_REF_NAME" `
+            --notes-file $notesPath
+
           if ($LASTEXITCODE -ne 0) {
             throw 'GitHub Release creation failed.'
           }

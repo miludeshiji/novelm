@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  test:
+    name: Build & Test (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        shell: pwsh
+        run: |
+          dotnet restore NovelM.sln `
+            --runtime win-x64 `
+            -p:Platform=x64 `
+            -m:1 `
+            -nr:false
+
+      - name: Ensure Windows App Runtime
+        shell: pwsh
+        run: |
+          $healthyRuntime = Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.2' |
+            Where-Object {
+              $_.Architecture -eq 'X64' -and
+              $_.Status -eq 'Ok' -and
+              [Version]$_.Version -ge [Version]'2.4.0.0'
+            }
+
+          if (-not $healthyRuntime) {
+            $runtimeInstaller = Join-Path $env:RUNNER_TEMP 'windowsappruntimeinstall-x64.exe'
+
+            Invoke-WebRequest `
+              -Uri 'https://aka.ms/windowsappsdk/2.4/2.4.0/windowsappruntimeinstall-x64.exe' `
+              -OutFile $runtimeInstaller
+
+            $expectedRuntimeSha256 = '851C35B0B0A59CE4C55F9171F601193322FC3413143B0DC3390EA11E14CFA7FC'
+            $actualRuntimeSha256 = (
+              Get-FileHash -LiteralPath $runtimeInstaller -Algorithm SHA256
+            ).Hash
+
+            if ($actualRuntimeSha256 -cne $expectedRuntimeSha256) {
+              throw "Windows App Runtime SHA256 mismatch. Expected $expectedRuntimeSha256, got $actualRuntimeSha256."
+            }
+
+            & $runtimeInstaller --quiet
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows App Runtime installation failed with exit code $LASTEXITCODE."
+            }
+          }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build NovelM.sln `
+            -c Release `
+            -p:Platform=x64 `
+            -p:ContinuousIntegrationBuild=true `
+            --no-restore `
+            --disable-build-servers `
+            -m:1 `
+            -nr:false `
+            --verbosity minimal
+
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet test NovelM.sln `
+            -c Release `
+            -p:Platform=x64 `
+            --no-build `
+            --no-restore `
+            --disable-build-servers `
+            -m:1 `
+            -nr:false `
+            --verbosity minimal
