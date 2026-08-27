@@ -52,6 +52,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     {
         _publishingService = publishingService;
         _errorMessageMapper = errorMessageMapper;
+        ObserveUploadQueues();
         Tags.CollectionChanged += (_, _) => MarkSettingsDirty();
         ChapterImages.CollectionChanged += (_, _) => MarkChapterDirty();
     }
@@ -73,13 +74,25 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     public bool IsBusy
     {
         get => _isBusy;
-        private set => SetProperty(ref _isBusy, value);
+        private set
+        {
+            if (SetProperty(ref _isBusy, value))
+            {
+                NotifyUploadAvailabilityChanged();
+            }
+        }
     }
 
     public bool IsUploading
     {
         get => _isUploading;
-        private set => SetProperty(ref _isUploading, value);
+        private set
+        {
+            if (SetProperty(ref _isUploading, value))
+            {
+                NotifyUploadAvailabilityChanged();
+            }
+        }
     }
 
     public string? ErrorMessage
@@ -324,6 +337,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         InfoHasUnsavedChanges
         || SettingsHasUnsavedChanges
         || ChapterHasUnsavedChanges
+        || HasPendingChapterImages
         || HasPendingBatchChapters;
 
     public IReadOnlyList<FailedImage> FailedUploads

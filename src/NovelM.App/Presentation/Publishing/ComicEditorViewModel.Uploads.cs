@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using NovelM_App.Domain.Common;
 using NovelM_App.Domain.Publishing;
 
@@ -6,6 +8,9 @@ namespace NovelM_App.Presentation.Publishing;
 
 public sealed partial class ComicEditorViewModel
 {
+    private readonly HashSet<PendingComicImage> _observedPendingChapterImages = [];
+    private readonly HashSet<PendingComicChapter> _observedPendingBatchChapters = [];
+
     public ObservableCollection<PendingComicImage> PendingChapterImages { get; } = [];
 
     public ObservableCollection<PendingComicChapter> PendingBatchChapters { get; } = [];
@@ -53,7 +58,6 @@ public sealed partial class ComicEditorViewModel
         }
 
         SortAndRenumber(PendingChapterImages);
-        RefreshUploadProperties();
         if (PendingChapterImages.Count > 0)
         {
             ChapterHasUnsavedChanges = true;
@@ -91,7 +95,172 @@ public sealed partial class ComicEditorViewModel
         }
 
         SortCollection(PendingBatchChapters, chapter => chapter.Title);
-        RefreshUploadProperties();
+    }
+
+    private void ObserveUploadQueues()
+    {
+        PendingChapterImages.CollectionChanged += OnPendingChapterImagesChanged;
+        PendingBatchChapters.CollectionChanged += OnPendingBatchChaptersChanged;
+    }
+
+    private void OnPendingChapterImagesChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs args)
+    {
+        UpdatePendingChapterImageSubscriptions(args);
+        OnPropertyChanged(nameof(HasPendingChapterImages));
+        OnPropertyChanged(nameof(CanUploadPendingChapterImages));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+    }
+
+    private void UpdatePendingChapterImageSubscriptions(
+        NotifyCollectionChangedEventArgs args)
+    {
+        if (args.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var image in _observedPendingChapterImages.ToArray())
+            {
+                StopObservingPendingChapterImage(image);
+            }
+
+            foreach (var image in PendingChapterImages)
+            {
+                ObservePendingChapterImage(image);
+            }
+
+            return;
+        }
+
+        if (args.OldItems is not null)
+        {
+            foreach (PendingComicImage image in args.OldItems)
+            {
+                StopObservingPendingChapterImage(image);
+            }
+        }
+
+        if (args.NewItems is not null)
+        {
+            foreach (PendingComicImage image in args.NewItems)
+            {
+                ObservePendingChapterImage(image);
+            }
+        }
+    }
+
+    private void ObservePendingChapterImage(PendingComicImage image)
+    {
+        if (_observedPendingChapterImages.Add(image))
+        {
+            image.PropertyChanged += OnPendingChapterImagePropertyChanged;
+        }
+    }
+
+    private void StopObservingPendingChapterImage(PendingComicImage image)
+    {
+        if (_observedPendingChapterImages.Remove(image))
+        {
+            image.PropertyChanged -= OnPendingChapterImagePropertyChanged;
+        }
+    }
+
+    private void OnPendingChapterImagePropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (string.IsNullOrEmpty(args.PropertyName)
+            || args.PropertyName == nameof(PendingComicImage.State))
+        {
+            OnPropertyChanged(nameof(CanUploadPendingChapterImages));
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+    }
+
+    private void OnPendingBatchChaptersChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs args)
+    {
+        UpdatePendingBatchChapterSubscriptions(args);
+        OnPropertyChanged(nameof(HasPendingBatchChapters));
+        OnPropertyChanged(nameof(CanUploadBatchChapters));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+    }
+
+    private void UpdatePendingBatchChapterSubscriptions(
+        NotifyCollectionChangedEventArgs args)
+    {
+        if (args.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var chapter in _observedPendingBatchChapters.ToArray())
+            {
+                StopObservingPendingBatchChapter(chapter);
+            }
+
+            foreach (var chapter in PendingBatchChapters)
+            {
+                ObservePendingBatchChapter(chapter);
+            }
+
+            return;
+        }
+
+        if (args.OldItems is not null)
+        {
+            foreach (PendingComicChapter chapter in args.OldItems)
+            {
+                StopObservingPendingBatchChapter(chapter);
+            }
+        }
+
+        if (args.NewItems is not null)
+        {
+            foreach (PendingComicChapter chapter in args.NewItems)
+            {
+                ObservePendingBatchChapter(chapter);
+            }
+        }
+    }
+
+    private void ObservePendingBatchChapter(PendingComicChapter chapter)
+    {
+        if (_observedPendingBatchChapters.Add(chapter))
+        {
+            chapter.PropertyChanged += OnPendingBatchChapterPropertyChanged;
+        }
+    }
+
+    private void StopObservingPendingBatchChapter(PendingComicChapter chapter)
+    {
+        if (_observedPendingBatchChapters.Remove(chapter))
+        {
+            chapter.PropertyChanged -= OnPendingBatchChapterPropertyChanged;
+        }
+    }
+
+    private void OnPendingBatchChapterPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (string.IsNullOrEmpty(args.PropertyName)
+            || args.PropertyName == nameof(PendingComicChapter.State))
+        {
+            OnPropertyChanged(nameof(HasPendingBatchChapters));
+            OnPropertyChanged(nameof(CanUploadBatchChapters));
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            return;
+        }
+
+        if (args.PropertyName is nameof(PendingComicChapter.ErrorMessage)
+            or nameof(PendingComicChapter.HasValidImages))
+        {
+            OnPropertyChanged(nameof(CanUploadBatchChapters));
+        }
+    }
+
+    private void NotifyUploadAvailabilityChanged()
+    {
+        OnPropertyChanged(nameof(CanUploadPendingChapterImages));
+        OnPropertyChanged(nameof(CanUploadBatchChapters));
     }
 
     private static string NormalizePath(string path) =>
@@ -130,21 +299,10 @@ public sealed partial class ComicEditorViewModel
     private void ClearPendingChapterImagesCore()
     {
         PendingChapterImages.Clear();
-        RefreshUploadProperties();
     }
 
     private void ClearPendingBatchChaptersCore()
     {
         PendingBatchChapters.Clear();
-        RefreshUploadProperties();
-    }
-
-    private void RefreshUploadProperties()
-    {
-        OnPropertyChanged(nameof(HasPendingChapterImages));
-        OnPropertyChanged(nameof(HasPendingBatchChapters));
-        OnPropertyChanged(nameof(CanUploadPendingChapterImages));
-        OnPropertyChanged(nameof(CanUploadBatchChapters));
-        OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 }

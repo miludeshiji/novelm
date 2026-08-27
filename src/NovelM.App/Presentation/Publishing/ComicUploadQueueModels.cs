@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using NovelM_App.Domain.Publishing;
 
@@ -144,6 +146,7 @@ public sealed class PendingComicImage : ObservableObject
 
 public sealed class PendingComicChapter : ObservableObject
 {
+    private readonly HashSet<PendingComicImage> _observedImages = [];
     private ComicChapterUploadState _state;
     private string? _errorMessage;
 
@@ -162,6 +165,11 @@ public sealed class PendingComicChapter : ObservableObject
         _state = errorMessage is null
             ? ComicChapterUploadState.Ready
             : ComicChapterUploadState.Failed;
+        Images.CollectionChanged += OnImagesCollectionChanged;
+        foreach (var image in Images)
+        {
+            ObserveImage(image);
+        }
     }
 
     public Guid Id { get; }
@@ -211,4 +219,72 @@ public sealed class PendingComicChapter : ObservableObject
         ComicChapterUploadState.Failed => "处理失败",
         _ => string.Empty
     };
+
+    private void OnImagesCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs args)
+    {
+        if (args.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var image in _observedImages.ToArray())
+            {
+                StopObservingImage(image);
+            }
+
+            foreach (var image in Images)
+            {
+                ObserveImage(image);
+            }
+        }
+        else
+        {
+            if (args.OldItems is not null)
+            {
+                foreach (PendingComicImage image in args.OldItems)
+                {
+                    StopObservingImage(image);
+                }
+            }
+
+            if (args.NewItems is not null)
+            {
+                foreach (PendingComicImage image in args.NewItems)
+                {
+                    ObserveImage(image);
+                }
+            }
+        }
+
+        OnPropertyChanged(nameof(HasValidImages));
+        OnPropertyChanged(nameof(AllImagesUploaded));
+        OnPropertyChanged(nameof(CanRetryCreate));
+    }
+
+    private void ObserveImage(PendingComicImage image)
+    {
+        if (_observedImages.Add(image))
+        {
+            image.PropertyChanged += OnImagePropertyChanged;
+        }
+    }
+
+    private void StopObservingImage(PendingComicImage image)
+    {
+        if (_observedImages.Remove(image))
+        {
+            image.PropertyChanged -= OnImagePropertyChanged;
+        }
+    }
+
+    private void OnImagePropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (string.IsNullOrEmpty(args.PropertyName)
+            || args.PropertyName == nameof(PendingComicImage.State))
+        {
+            OnPropertyChanged(nameof(AllImagesUploaded));
+            OnPropertyChanged(nameof(CanRetryCreate));
+        }
+    }
 }
