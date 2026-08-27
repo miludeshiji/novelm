@@ -20,6 +20,7 @@ public sealed partial class PublishingPage : Page
     private static readonly HashSet<string> ImageFileTypeSet =
         new(ImageFileTypes, StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<Image, PendingComicImage> _pendingImageBindings = [];
     private CancellationTokenSource? _pageCancellation;
     private bool _hasLoadedInitialData;
     private bool _isInitialLoadInProgress;
@@ -97,6 +98,10 @@ public sealed partial class PublishingPage : Page
         _isLoaded = false;
         _isInitialLoadInProgress = false;
         Unsubscribe();
+        foreach (var image in _pendingImageBindings.Keys.ToArray())
+        {
+            UnbindPendingImage(image);
+        }
 
         var cancellation = _pageCancellation;
         _pageCancellation = null;
@@ -714,9 +719,13 @@ public sealed partial class PublishingPage : Page
                 return;
             }
 
-            var selections = folders
-                .Select(folder => ScanChapterFolder(folder.Path))
+            var folderPaths = folders
+                .Select(folder => folder.Path)
                 .ToArray();
+            var selections = await Task.Run(
+                    () => folderPaths.Select(ScanChapterFolder).ToArray(),
+                    cancellation.Value)
+                .WaitAsync(cancellation.Value);
             if (ReferenceEquals(_pageCancellation, pageCancellation)
                 && Editor.BookId == bookId)
             {
@@ -1482,22 +1491,76 @@ public sealed partial class PublishingPage : Page
         image.Source = CreateHttpImage(url);
     }
 
-    private async void PendingImage_Loaded(object sender, RoutedEventArgs args)
+    private void PendingImage_Loaded(object sender, RoutedEventArgs args)
     {
         if (sender is Image image)
         {
-            await UpdatePendingImageAsync(image, image.DataContext);
+            BindPendingImage(image, image.DataContext);
         }
     }
 
-    private async void PendingImage_DataContextChanged(
+    private void PendingImage_DataContextChanged(
         FrameworkElement sender,
         DataContextChangedEventArgs args)
     {
         if (sender is Image image)
         {
-            await UpdatePendingImageAsync(image, args.NewValue);
+            BindPendingImage(image, args.NewValue);
         }
+    }
+
+    private void PendingImage_Unloaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is Image image)
+        {
+            UnbindPendingImage(image);
+            image.Source = null;
+        }
+    }
+
+    private void BindPendingImage(Image image, object? dataContext)
+    {
+        UnbindPendingImage(image);
+        image.Source = null;
+        if (dataContext is not PendingComicImage item)
+        {
+            return;
+        }
+
+        _pendingImageBindings[image] = item;
+        item.PropertyChanged += PendingImage_PropertyChanged;
+        _ = UpdatePendingImageAsync(image, item);
+    }
+
+    private void UnbindPendingImage(Image image)
+    {
+        if (_pendingImageBindings.Remove(image, out var item))
+        {
+            item.PropertyChanged -= PendingImage_PropertyChanged;
+        }
+    }
+
+    private void PendingImage_PropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (sender is not PendingComicImage item
+            || (!string.IsNullOrEmpty(args.PropertyName)
+                && args.PropertyName != nameof(PendingComicImage.FilePath)))
+        {
+            return;
+        }
+
+        RunOnUiThread(() =>
+        {
+            foreach (var (image, boundItem) in _pendingImageBindings.ToArray())
+            {
+                if (ReferenceEquals(boundItem, item))
+                {
+                    _ = UpdatePendingImageAsync(image, item);
+                }
+            }
+        });
     }
 
     private static async Task UpdatePendingImageAsync(
@@ -1510,27 +1573,34 @@ public sealed partial class PublishingPage : Page
             return;
         }
 
+        var filePath = item.FilePath;
         AutomationProperties.SetName(image, item.FileName);
         try
         {
-            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(
-                item.FilePath);
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(filePath);
             using var stream = await file.OpenReadAsync();
             var bitmap = new BitmapImage();
             await bitmap.SetSourceAsync(stream);
-            if (ReferenceEquals(image.DataContext, item))
+            if (IsCurrentPendingImagePreview(image, item, filePath))
             {
                 image.Source = bitmap;
             }
         }
         catch
         {
-            if (ReferenceEquals(image.DataContext, item))
+            if (IsCurrentPendingImagePreview(image, item, filePath))
             {
                 image.Source = null;
             }
         }
     }
+
+    private static bool IsCurrentPendingImagePreview(
+        Image image,
+        PendingComicImage item,
+        string filePath) =>
+        ReferenceEquals(image.DataContext, item)
+        && string.Equals(item.FilePath, filePath, StringComparison.OrdinalIgnoreCase);
 
     private static BitmapImage? CreateHttpImage(string? source)
     {
@@ -1561,9 +1631,7 @@ public sealed partial class PublishingPage : Page
 
     internal static LocalComicChapterSelection ScanChapterFolder(string folderPath)
     {
-        var title = Path.GetFileName(folderPath.TrimEnd(
-            Path.DirectorySeparatorChar,
-            Path.AltDirectorySeparatorChar));
+        var title = GetChapterFolderTitle(folderPath);
         try
         {
             var images = Directory
@@ -1572,6 +1640,8 @@ public sealed partial class PublishingPage : Page
                 .OrderBy(
                     path => Path.GetFileName(path),
                     NaturalNameComparer.Instance)
+                .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(path => Path.GetFileName(path), StringComparer.Ordinal)
                 .Select(path => new LocalImageSource(
                     Guid.NewGuid(),
                     Path.GetFileName(path),
@@ -1592,6 +1662,23 @@ public sealed partial class PublishingPage : Page
                 [],
                 exception.Message);
         }
+    }
+
+    internal static string GetChapterFolderTitle(string folderPath)
+    {
+        var trimmed = folderPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+        if (trimmed.Length == 0)
+        {
+            return folderPath;
+        }
+
+        var separatorIndex = trimmed.LastIndexOfAny(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+        return separatorIndex >= 0 && separatorIndex < trimmed.Length - 1
+            ? trimmed[(separatorIndex + 1)..]
+            : trimmed;
     }
 
     private static T? FindAncestor<T>(DependencyObject element)

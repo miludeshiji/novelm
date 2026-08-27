@@ -131,6 +131,40 @@ public sealed class PublishingPageTests
     }
 
     [TestMethod]
+    public void ScanChapterFolder_NaturalTiesUseOrdinalFileNameOrder()
+    {
+        var chapterFolder = Path.Combine(
+            Path.GetTempPath(),
+            $"novelm-ties-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(chapterFolder);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(chapterFolder, "1.jpg"), [1]);
+            File.WriteAllBytes(Path.Combine(chapterFolder, "01.jpg"), [2]);
+
+            var result = PublishingPage.ScanChapterFolder(chapterFolder);
+
+            CollectionAssert.AreEqual(
+                new[] { "01.jpg", "1.jpg" },
+                result.Images.Select(item => item.FileName).ToArray());
+            var scannerSource = ExtractSourceRange(
+                ReadPageSource(),
+                "internal static LocalComicChapterSelection ScanChapterFolder(",
+                "internal static string GetChapterFolderTitle(");
+            StringAssert.Contains(
+                scannerSource,
+                ".ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)");
+            StringAssert.Contains(
+                scannerSource,
+                ".ThenBy(path => Path.GetFileName(path), StringComparer.Ordinal)");
+        }
+        finally
+        {
+            Directory.Delete(chapterFolder, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void ScanChapterFolder_MissingFolderReturnsSelectionErrorWithoutThrowing()
     {
         var chapterFolder = Path.Combine(
@@ -146,6 +180,18 @@ public sealed class PublishingPageTests
     }
 
     [TestMethod]
+    public void GetChapterFolderTitle_RootPathsReturnNonEmptyNames()
+    {
+        Assert.AreEqual("C:", PublishingPage.GetChapterFolderTitle(@"C:\"));
+        Assert.AreEqual(
+            "share",
+            PublishingPage.GetChapterFolderTitle(@"\\server\share\"));
+        Assert.AreEqual(
+            "第2章",
+            PublishingPage.GetChapterFolderTitle(@"C:\comics\第2章\"));
+    }
+
+    [TestMethod]
     public void ChapterPickerHandlers_StagePathsAndExposeExplicitUploadCommands()
     {
         var pageSource = ReadPageSource();
@@ -157,6 +203,26 @@ public sealed class PublishingPageTests
             pageSource,
             "private async void SelectCoverButton_Click(",
             "private async void SaveInfoButton_Click(");
+        var uploadChapterHandler = ExtractSourceRange(
+            pageSource,
+            "private async void UploadChapterImagesButton_Click(",
+            "private void ClearPendingChapterImagesButton_Click(");
+        var replaceChapterHandler = ExtractSourceRange(
+            pageSource,
+            "private async void ReplacePendingChapterImageButton_Click(",
+            "private async void SelectBatchChapterFoldersButton_Click(");
+        var uploadBatchHandler = ExtractSourceRange(
+            pageSource,
+            "private async void UploadBatchChaptersButton_Click(",
+            "private async void RemoveBatchChapterButton_Click(");
+        var replaceBatchHandler = ExtractSourceRange(
+            pageSource,
+            "private async void ReplaceBatchImageButton_Click(",
+            "private async void RetryBatchChapterButton_Click(");
+        var retryBatchHandler = ExtractSourceRange(
+            pageSource,
+            "private async void RetryBatchChapterButton_Click(",
+            "private async void ClearChapterImagesButton_Click(");
 
         StringAssert.Contains(selectionHandler, "Editor.StageChapterImages(");
         Assert.IsFalse(selectionHandler.Contains("ReadAllBytes", StringComparison.Ordinal));
@@ -165,12 +231,45 @@ public sealed class PublishingPageTests
             StringComparison.Ordinal));
         StringAssert.Contains(coverHandler, "new LocalImageSource(");
         StringAssert.Contains(coverHandler, "Editor.UploadCoverAsync(");
-        StringAssert.Contains(pageSource, "UploadChapterImagesButton_Click");
-        StringAssert.Contains(pageSource, "SelectBatchChapterFoldersButton_Click");
-        StringAssert.Contains(pageSource, "UploadBatchChaptersButton_Click");
-        StringAssert.Contains(pageSource, "ReplacePendingChapterImageButton_Click");
-        StringAssert.Contains(pageSource, "ReplaceBatchImageButton_Click");
-        StringAssert.Contains(pageSource, "RetryBatchChapterButton_Click");
+        StringAssert.Contains(
+            uploadChapterHandler,
+            "ExecuteAsync(Editor.UploadPendingChapterImagesAsync)");
+        StringAssert.Contains(replaceChapterHandler, "PickReplacementImageAsync()");
+        StringAssert.Contains(
+            replaceChapterHandler,
+            "Editor.ReplaceFailedChapterImageAsync(");
+        StringAssert.Contains(
+            uploadBatchHandler,
+            "ExecuteAsync(Editor.UploadBatchChaptersAsync)");
+        StringAssert.Contains(replaceBatchHandler, "PickReplacementImageAsync()");
+        StringAssert.Contains(
+            replaceBatchHandler,
+            "Editor.ReplaceFailedBatchImageAsync(");
+        StringAssert.Contains(retryBatchHandler, "CanRetryCreate: true");
+        StringAssert.Contains(
+            retryBatchHandler,
+            "Editor.RetryBatchChapterCreationAsync(");
+    }
+
+    [TestMethod]
+    public void BatchFolderPickerHandler_OffloadsScanningAndRechecksPageContext()
+    {
+        var handler = ExtractSourceRange(
+            ReadPageSource(),
+            "private async void SelectBatchChapterFoldersButton_Click(",
+            "private async void UploadBatchChaptersButton_Click(");
+
+        StringAssert.Contains(handler, "var folderPaths = folders");
+        StringAssert.Contains(handler, ".Select(folder => folder.Path)");
+        StringAssert.Contains(handler, "await Task.Run(");
+        StringAssert.Contains(handler, ".Select(ScanChapterFolder)");
+        StringAssert.Contains(handler, "cancellation.Value");
+        StringAssert.Contains(
+            handler,
+            "ReferenceEquals(_pageCancellation, pageCancellation)");
+        Assert.IsTrue(
+            handler.IndexOf("var folderPaths = folders", StringComparison.Ordinal)
+            < handler.IndexOf("await Task.Run(", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -182,10 +281,68 @@ public sealed class PublishingPageTests
             "private static async Task UpdatePendingImageAsync(",
             "private static BitmapImage? CreateHttpImage(");
 
-        StringAssert.Contains(previewHelper, "StorageFile.GetFileFromPathAsync");
+        StringAssert.Contains(previewHelper, "var filePath = item.FilePath;");
+        StringAssert.Contains(
+            previewHelper,
+            "StorageFile.GetFileFromPathAsync(filePath)");
         StringAssert.Contains(previewHelper, "bitmap.SetSourceAsync");
-        StringAssert.Contains(previewHelper, "ReferenceEquals(image.DataContext, item)");
+        Assert.IsTrue(
+            CountOccurrences(
+                previewHelper,
+                "IsCurrentPendingImagePreview(image, item, filePath)") >= 2);
         Assert.IsFalse(previewHelper.Contains("item.Fail(", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void PendingImagePreview_RebindsOnPathChangeAndUnsubscribes()
+    {
+        var pageSource = ReadPageSource();
+        var loadedHandler = ExtractSourceRange(
+            pageSource,
+            "private void PendingImage_Loaded(",
+            "private void PendingImage_DataContextChanged(");
+        var dataContextHandler = ExtractSourceRange(
+            pageSource,
+            "private void PendingImage_DataContextChanged(",
+            "private void PendingImage_Unloaded(");
+        var unloadedHandler = ExtractSourceRange(
+            pageSource,
+            "private void PendingImage_Unloaded(",
+            "private void BindPendingImage(");
+        var bindHelper = ExtractSourceRange(
+            pageSource,
+            "private void BindPendingImage(",
+            "private void UnbindPendingImage(");
+        var unbindHelper = ExtractSourceRange(
+            pageSource,
+            "private void UnbindPendingImage(",
+            "private void PendingImage_PropertyChanged(");
+        var propertyHandler = ExtractSourceRange(
+            pageSource,
+            "private void PendingImage_PropertyChanged(",
+            "private static async Task UpdatePendingImageAsync(");
+        var pageUnloadedHandler = ExtractSourceRange(
+            pageSource,
+            "private void PublishingPage_Unloaded(",
+            "private void Subscribe(");
+
+        StringAssert.Contains(loadedHandler, "BindPendingImage(");
+        StringAssert.Contains(dataContextHandler, "BindPendingImage(");
+        StringAssert.Contains(unloadedHandler, "UnbindPendingImage(");
+        StringAssert.Contains(bindHelper, "UnbindPendingImage(image);");
+        StringAssert.Contains(
+            bindHelper,
+            "item.PropertyChanged += PendingImage_PropertyChanged;");
+        StringAssert.Contains(
+            unbindHelper,
+            "item.PropertyChanged -= PendingImage_PropertyChanged;");
+        StringAssert.Contains(
+            propertyHandler,
+            "nameof(PendingComicImage.FilePath)");
+        StringAssert.Contains(
+            propertyHandler,
+            "UpdatePendingImageAsync(image, item)");
+        StringAssert.Contains(pageUnloadedHandler, "UnbindPendingImage(image);");
     }
 
     private static string ReadPageSource()
@@ -214,6 +371,22 @@ public sealed class PublishingPageTests
         var end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
         Assert.IsTrue(end > start, $"Missing source marker: {endMarker}");
         return source[start..end];
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        for (var index = 0;;)
+        {
+            index = source.IndexOf(value, index, StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return count;
+            }
+
+            count++;
+            index += value.Length;
+        }
     }
 
     private static string CurrentSourceFile(
