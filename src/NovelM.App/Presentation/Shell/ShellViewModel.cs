@@ -6,6 +6,11 @@ namespace NovelM_App.Presentation.Shell;
 
 public partial class ShellViewModel : ObservableObject
 {
+    public IReadOnlyList<string> NavigationTags { get; } =
+        ["manga", "publishing", "settings"];
+
+    public string DefaultNavigationTag => "manga";
+
     [ObservableProperty]
     public partial string CurrentNodeDisplayName { get; set; }
 

@@ -1,0 +1,410 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="NovelM_App.Presentation.Manga.MangaPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:manga="using:NovelM_App.Domain.Manga"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <Grid Margin="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="8">
+            <InfoBar
+                IsClosable="False"
+                IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
+                Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                Severity="Error" />
+            <InfoBar
+                x:Name="NoticeInfoBar"
+                Closed="NoticeInfoBar_Closed"
+                IsClosable="True"
+                Message="{x:Bind ViewModel.NoticeMessage, Mode=OneWay}"
+                Severity="Informational" />
+        </StackPanel>
+
+        <Grid x:Name="CatalogPanel" Grid.Row="1" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <CommandBar DefaultLabelPosition="Right">
+                <CommandBar.Content>
+                    <Grid
+                        MinWidth="240"
+                        ColumnSpacing="8"
+                        RowSpacing="8">
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup>
+                                <VisualState x:Name="CatalogNarrow">
+                                    <VisualState.StateTriggers>
+                                        <AdaptiveTrigger MinWindowWidth="0" />
+                                    </VisualState.StateTriggers>
+                                    <VisualState.Setters>
+                                        <Setter Target="CatalogSecondRow.Height" Value="Auto" />
+                                        <Setter Target="SortComboBox.(Grid.Row)" Value="1" />
+                                        <Setter Target="SortComboBox.(Grid.Column)" Value="0" />
+                                        <Setter Target="SortComboBox.(Grid.ColumnSpan)" Value="3" />
+                                        <Setter Target="SortComboBox.HorizontalAlignment" Value="Stretch" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="CatalogWide">
+                                    <VisualState.StateTriggers>
+                                        <AdaptiveTrigger MinWindowWidth="760" />
+                                    </VisualState.StateTriggers>
+                                    <VisualState.Setters>
+                                        <Setter Target="CatalogSecondRow.Height" Value="0" />
+                                        <Setter Target="SortComboBox.(Grid.Row)" Value="0" />
+                                        <Setter Target="SortComboBox.(Grid.Column)" Value="1" />
+                                        <Setter Target="SortComboBox.(Grid.ColumnSpan)" Value="1" />
+                                        <Setter Target="SortComboBox.HorizontalAlignment" Value="Left" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition x:Name="CatalogSecondRow" Height="0" />
+                        </Grid.RowDefinitions>
+                        <TextBox
+                            x:Name="CatalogSearchBox"
+                            MinWidth="120"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="漫画搜索关键词"
+                            KeyDown="CatalogSearchBox_KeyDown"
+                            PlaceholderText="搜索漫画系列"
+                            Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <ComboBox
+                            x:Name="SortComboBox"
+                            Grid.Column="1"
+                            MinWidth="132"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="排序方式"
+                            SelectedIndex="0"
+                            SelectionChanged="SortComboBox_SelectionChanged">
+                            <ComboBoxItem Content="最近更新 (latest)" />
+                            <ComboBoxItem Content="最新发布 (new)" />
+                            <ComboBoxItem Content="最多浏览 (view)" />
+                        </ComboBox>
+                        <ProgressRing
+                            x:Name="BusyIndicator"
+                            Grid.Column="2"
+                            Width="28"
+                            Height="28"
+                            VerticalAlignment="Center"
+                            AutomationProperties.LiveSetting="Polite"
+                            AutomationProperties.Name="漫画目录加载状态"
+                            IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" />
+                    </Grid>
+                </CommandBar.Content>
+                <AppBarButton
+                    x:Name="SearchButton"
+                    Click="SearchButton_Click"
+                    Icon="Find"
+                    Label="搜索" />
+                <AppBarButton
+                    x:Name="RefreshButton"
+                    Click="RefreshButton_Click"
+                    Icon="Refresh"
+                    Label="刷新" />
+            </CommandBar>
+
+            <Grid Grid.Row="1">
+                <GridView
+                    x:Name="SeriesGridView"
+                    IsItemClickEnabled="True"
+                    ItemClick="SeriesGridView_ItemClick"
+                    ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+                    SelectionMode="None">
+                    <GridView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid
+                                ItemHeight="330"
+                                ItemWidth="208"
+                                Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </GridView.ItemsPanel>
+                    <GridView.ItemTemplate>
+                        <DataTemplate x:DataType="manga:MangaListItem">
+                            <Border
+                                Width="196"
+                                Height="318"
+                                Padding="10"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                                <Grid RowSpacing="8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="220" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Image
+                                        Height="220"
+                                        Loaded="CatalogCover_Loaded"
+                                        DataContextChanged="CatalogCover_DataContextChanged"
+                                        Stretch="UniformToFill" />
+                                    <StackPanel Grid.Row="1" Spacing="3">
+                                        <TextBlock
+                                            FontWeight="SemiBold"
+                                            MaxLines="2"
+                                            Text="{x:Bind Title}"
+                                            TextTrimming="CharacterEllipsis"
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{x:Bind ChapterCount}" />
+                                        <TextBlock
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{x:Bind LastUpdatedAt}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </GridView.ItemTemplate>
+                </GridView>
+
+                <TextBlock
+                    x:Name="EmptyCatalogText"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    FontSize="18"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    IsHitTestVisible="False"
+                    Text="暂无漫画，请尝试刷新或更换搜索词。" />
+            </Grid>
+
+            <StackPanel
+                x:Name="PaginationPanel"
+                Grid.Row="2"
+                HorizontalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="12">
+                <Button
+                    x:Name="PreviousPageButton"
+                    Click="PreviousPageButton_Click"
+                    Content="上一页" />
+                <TextBlock
+                    x:Name="PageNumberText"
+                    VerticalAlignment="Center"
+                    AutomationProperties.LiveSetting="Polite" />
+                <Button
+                    x:Name="NextPageButton"
+                    Click="NextPageButton_Click"
+                    Content="下一页" />
+            </StackPanel>
+        </Grid>
+
+        <ScrollViewer
+            x:Name="DetailsPanel"
+            Grid.Row="1"
+            Visibility="Collapsed">
+            <StackPanel Padding="0,0,12,24" Spacing="20">
+                <Button
+                    HorizontalAlignment="Left"
+                    Click="BackButton_Click"
+                    Content="返回目录" />
+
+                <Border
+                    Padding="20"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid x:Name="SeriesHeader">
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup>
+                                <VisualState x:Name="Narrow">
+                                    <VisualState.StateTriggers>
+                                        <AdaptiveTrigger MinWindowWidth="0" />
+                                    </VisualState.StateTriggers>
+                                    <VisualState.Setters>
+                                        <Setter Target="HeaderCoverColumn.Width" Value="*" />
+                                        <Setter Target="HeaderTextColumn.Width" Value="0" />
+                                        <Setter Target="HeaderCoverRow.Height" Value="Auto" />
+                                        <Setter Target="HeaderTextRow.Height" Value="Auto" />
+                                        <Setter Target="HeaderTextPanel.(Grid.Column)" Value="0" />
+                                        <Setter Target="HeaderTextPanel.(Grid.Row)" Value="1" />
+                                        <Setter Target="HeaderTextPanel.Margin" Value="0,16,0,0" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Wide">
+                                    <VisualState.StateTriggers>
+                                        <AdaptiveTrigger MinWindowWidth="900" />
+                                    </VisualState.StateTriggers>
+                                    <VisualState.Setters>
+                                        <Setter Target="HeaderCoverColumn.Width" Value="180" />
+                                        <Setter Target="HeaderTextColumn.Width" Value="*" />
+                                        <Setter Target="HeaderCoverRow.Height" Value="Auto" />
+                                        <Setter Target="HeaderTextRow.Height" Value="0" />
+                                        <Setter Target="HeaderTextPanel.(Grid.Column)" Value="1" />
+                                        <Setter Target="HeaderTextPanel.(Grid.Row)" Value="0" />
+                                        <Setter Target="HeaderTextPanel.Margin" Value="20,0,0,0" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="HeaderCoverColumn" Width="180" />
+                            <ColumnDefinition x:Name="HeaderTextColumn" Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition x:Name="HeaderCoverRow" Height="Auto" />
+                            <RowDefinition x:Name="HeaderTextRow" Height="0" />
+                        </Grid.RowDefinitions>
+
+                        <Image
+                            x:Name="DetailsCoverImage"
+                            Width="180"
+                            Height="252"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            Stretch="UniformToFill" />
+
+                        <StackPanel
+                            x:Name="HeaderTextPanel"
+                            Grid.Column="1"
+                            Spacing="8">
+                            <TextBlock
+                                FontSize="28"
+                                FontWeight="SemiBold"
+                                Text="{x:Bind ViewModel.SelectedSeries.Title, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.SelectedSeries.OriginalTitle, Mode=OneWay}"
+                                TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind ViewModel.SelectedSeries.Author, Mode=OneWay}" />
+                            <TextBlock Text="{x:Bind ViewModel.SelectedSeries.LastUpdatedChapter, Mode=OneWay}" />
+                            <TextBlock Text="{x:Bind ViewModel.SelectedSeries.LastUpdatedAt, Mode=OneWay}" />
+                            <StackPanel Orientation="Horizontal" Spacing="20">
+                                <TextBlock Text="浏览" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedSeries.Views, Mode=OneWay}" />
+                                <TextBlock Text="收藏" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedSeries.Favorite, Mode=OneWay}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <StackPanel Spacing="8">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="标签" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SelectedSeries.Tags, Mode=OneWay}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border
+                                    Margin="0,0,8,8"
+                                    Padding="10,4"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    CornerRadius="12">
+                                    <TextBlock Text="{Binding}" />
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="简介" />
+                    <TextBlock
+                        IsTextSelectionEnabled="True"
+                        Text="{x:Bind ViewModel.SelectedSeries.Introduction, Mode=OneWay}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="章节" />
+                    <ItemsRepeater ItemsSource="{x:Bind ViewModel.SelectedSeries.Volumes, Mode=OneWay}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="12" />
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="manga:MangaVolume">
+                                <Border
+                                    Padding="16"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="96" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image
+                                            Width="96"
+                                            Height="136"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Top"
+                                            Loaded="VolumeCover_Loaded"
+                                            DataContextChanged="VolumeCover_DataContextChanged"
+                                            Stretch="UniformToFill" />
+                                        <StackPanel Grid.Column="1" Spacing="8">
+                                            <TextBlock
+                                                FontSize="18"
+                                                FontWeight="SemiBold"
+                                                Text="{x:Bind Title}"
+                                                TextWrapping="Wrap" />
+                                            <TextBlock
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Text="{x:Bind UploaderName}" />
+                                            <ItemsRepeater ItemsSource="{x:Bind Chapters}">
+                                                <ItemsRepeater.Layout>
+                                                    <StackLayout Spacing="4" />
+                                                </ItemsRepeater.Layout>
+                                                <ItemsRepeater.ItemTemplate>
+                                                    <DataTemplate x:DataType="manga:MangaChapterSummary">
+                                                        <Button
+                                                            HorizontalAlignment="Stretch"
+                                                            HorizontalContentAlignment="Stretch"
+                                                            AutomationProperties.Name="{x:Bind Title}"
+                                                            Click="ChapterButton_Click">
+                                                            <Grid ColumnSpacing="12">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Text="{x:Bind SortNum}" />
+                                                                <TextBlock
+                                                                    Grid.Column="1"
+                                                                    Text="{x:Bind Title}"
+                                                                    TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock
+                                                                    Grid.Column="2"
+                                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                                    Text="{x:Bind PageCount}" />
+                                                            </Grid>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsRepeater.ItemTemplate>
+                                            </ItemsRepeater>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsRepeater.ItemTemplate>
+                    </ItemsRepeater>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

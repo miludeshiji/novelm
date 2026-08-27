@@ -6,7 +6,8 @@ using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Configuration;
 using NovelM_App.Domain.Connection;
 using NovelM_App.Presentation.Account;
-using NovelM_App.Presentation.BookProbe;
+using NovelM_App.Presentation.Manga;
+using NovelM_App.Presentation.Publishing;
 using NovelM_App.Presentation.Settings;
 using NovelM_App.Presentation.Shell;
 
@@ -16,6 +17,9 @@ public sealed partial class MainWindow : Window
 {
     private readonly IApiServerManager _serverManager;
     private readonly ISignalRConnection _signalRConnection;
+    private MangaPage? _mangaPage;
+    private bool _isNavigationInProgress;
+    private bool _isNavigationSelectionSuppressed;
 
     public MainWindow(
         ShellViewModel viewModel,
@@ -48,8 +52,11 @@ public sealed partial class MainWindow : Window
     {
         if (ContentHost.Content is null)
         {
-            NavView.SelectedItem = BookItem;
-            ShowPage("book");
+            NavView.SelectedItem = MangaItem;
+            if (ContentHost.Content is null)
+            {
+                ShowPage(ViewModel.DefaultNavigationTag);
+            }
         }
     }
 
@@ -58,26 +65,114 @@ public sealed partial class MainWindow : Window
         NavView.IsPaneOpen = !NavView.IsPaneOpen;
     }
 
-    private void NavView_SelectionChanged(
+    private async void NavView_SelectionChanged(
         NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
-        if (args.SelectedItem is NavigationViewItem { Tag: string tag })
+        if (_isNavigationSelectionSuppressed)
+        {
+            return;
+        }
+
+        if (args.SelectedItem is not NavigationViewItem { Tag: string tag } requestedItem)
+        {
+            return;
+        }
+
+        if (_isNavigationInProgress)
+        {
+            RestorePublishingSelection();
+            return;
+        }
+
+        if (ContentHost.Content is not PublishingPage publishingPage
+            || tag == "publishing")
         {
             ShowPage(tag);
+            return;
+        }
+
+        _isNavigationInProgress = true;
+        try
+        {
+            if (!await publishingPage.ConfirmNavigationAwayAsync())
+            {
+                RestorePublishingSelection();
+                return;
+            }
+
+            SetNavigationSelection(requestedItem);
+            ShowPage(tag);
+        }
+        finally
+        {
+            _isNavigationInProgress = false;
+        }
+    }
+
+    private void RestorePublishingSelection()
+    {
+        SetNavigationSelection(PublishingItem);
+    }
+
+    private void SetNavigationSelection(NavigationViewItem item)
+    {
+        _isNavigationSelectionSuppressed = true;
+        try
+        {
+            NavView.SelectedItem = item;
+        }
+        finally
+        {
+            _isNavigationSelectionSuppressed = false;
         }
     }
 
     private void ShowPage(string tag)
     {
+        ReleaseCurrentPublishingPage();
+
         ContentHost.Content = tag switch
         {
-            "book" => App.Services.GetRequiredService<BookProbePage>(),
+            "manga" => GetOrCreateMangaPage(),
+            "publishing" => CreatePublishingPage(),
             "settings" => App.Services.GetRequiredService<SettingsPage>(),
             "account" => App.Services.GetRequiredService<AccountPage>(),
             _ => throw new InvalidOperationException(
                 $"Unknown navigation item tag: {tag}")
         };
+    }
+
+    private MangaPage GetOrCreateMangaPage()
+    {
+        return _mangaPage ??= App.Services.GetRequiredService<MangaPage>();
+    }
+
+    private PublishingPage CreatePublishingPage()
+    {
+        var page = App.Services.GetRequiredService<PublishingPage>();
+        page.AccountNavigationRequested += PublishingPage_AccountNavigationRequested;
+        return page;
+    }
+
+    private void ReleaseCurrentPublishingPage()
+    {
+        if (ContentHost.Content is PublishingPage page)
+        {
+            page.AccountNavigationRequested -= PublishingPage_AccountNavigationRequested;
+        }
+    }
+
+    private void PublishingPage_AccountNavigationRequested(
+        object? sender,
+        EventArgs args)
+    {
+        SetNavigationSelection(AccountItem);
+
+        if (ContentHost.Content is not AccountPage)
+        {
+            ShowPage("account");
+        }
     }
 
     private void ServerManager_CurrentChanged(
@@ -106,6 +201,9 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
+        ReleaseCurrentPublishingPage();
+        ContentHost.Content = null;
+        _mangaPage = null;
         _serverManager.CurrentChanged -= ServerManager_CurrentChanged;
         _signalRConnection.StateChanged -= SignalRConnection_StateChanged;
         Closed -= MainWindow_Closed;

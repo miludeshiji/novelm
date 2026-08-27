@@ -329,6 +329,34 @@ public sealed class ComicPublishingServiceTests
     }
 
     [TestMethod]
+    public async Task UploadImagesAsync_Unauthorized_PropagatesInsteadOfBecomingFailedImage()
+    {
+        var unauthorized = new AppException(
+            AppErrorKind.Unauthorized,
+            "Sign in again.");
+        var api = new FakeComicPublishingApi
+        {
+            UploadHandler = (file, _) => file.FileName switch
+            {
+                "2.jpg" => Task.FromException<string>(unauthorized),
+                "3.jpg" => Task.FromException<string>(
+                    new InvalidOperationException("ordinary failure")),
+                _ => Task.FromResult($"https://images.example/{file.FileName}")
+            }
+        };
+        var service = new ComicPublishingService(api);
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            service.UploadImagesAsync(
+                [File("1.jpg"), File("2.jpg"), File("3.jpg")],
+                CancellationToken.None));
+
+        Assert.AreSame(unauthorized, exception);
+        Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
+        Assert.AreEqual(3, api.UploadCallCount);
+    }
+
+    [TestMethod]
     public async Task PublishingOperations_ValidInputs_DelegateNormalizedValues()
     {
         var api = new FakeComicPublishingApi();

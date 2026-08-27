@@ -1,0 +1,604 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="NovelM_App.Presentation.Publishing.PublishingPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:publishing="using:NovelM_App.Domain.Publishing"
+    mc:Ignorable="d">
+    <Grid
+        x:Name="RootGrid"
+        Margin="24"
+        RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="8">
+            <InfoBar
+                x:Name="ErrorInfoBar"
+                AutomationProperties.LiveSetting="Assertive"
+                IsClosable="False"
+                Severity="Error" />
+            <InfoBar
+                x:Name="NoticeInfoBar"
+                AutomationProperties.LiveSetting="Polite"
+                Closed="NoticeInfoBar_Closed"
+                IsClosable="True"
+                Severity="Informational" />
+        </StackPanel>
+
+        <StackPanel
+            x:Name="CheckingSessionPanel"
+            Grid.Row="1"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="12">
+            <ProgressRing
+                Width="36"
+                Height="36"
+                AutomationProperties.LiveSetting="Polite"
+                AutomationProperties.Name="正在检查登录状态"
+                IsActive="True" />
+            <TextBlock Text="正在检查登录状态" />
+        </StackPanel>
+
+        <StackPanel
+            x:Name="SignedOutPanel"
+            Grid.Row="1"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="12"
+            Visibility="Collapsed">
+            <TextBlock
+                FontSize="22"
+                FontWeight="SemiBold"
+                Text="登录后才能管理漫画发布"
+                TextAlignment="Center" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="请前往账户页面登录，然后返回发布工作台。"
+                TextAlignment="Center" />
+            <Button
+                HorizontalAlignment="Center"
+                AutomationProperties.Name="前往账户登录"
+                Click="AccountButton_Click"
+                Content="前往账户" />
+        </StackPanel>
+
+        <Grid
+            x:Name="WorkbenchPanel"
+            Grid.Row="1"
+            RowSpacing="12"
+            Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <CommandBar DefaultLabelPosition="Right">
+                <CommandBar.Content>
+                    <Grid
+                        MinWidth="220"
+                        ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox
+                            x:Name="ComicSearchBox"
+                            MinWidth="160"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="搜索我的漫画"
+                            KeyDown="ComicSearchBox_KeyDown"
+                            PlaceholderText="标题关键词"
+                            Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <ProgressRing
+                            x:Name="BusyIndicator"
+                            Grid.Column="1"
+                            Width="28"
+                            Height="28"
+                            VerticalAlignment="Center"
+                            AutomationProperties.LiveSetting="Polite"
+                            AutomationProperties.Name="发布工作台操作状态" />
+                    </Grid>
+                </CommandBar.Content>
+                <AppBarButton
+                    x:Name="SearchButton"
+                    AutomationProperties.Name="搜索漫画"
+                    Click="SearchButton_Click"
+                    Icon="Find"
+                    Label="搜索" />
+                <AppBarButton
+                    x:Name="CreateComicButton"
+                    AutomationProperties.Name="发布漫画"
+                    Click="CreateComicButton_Click"
+                    Icon="Add"
+                    Label="发布漫画" />
+                <AppBarButton
+                    x:Name="RefreshButton"
+                    AutomationProperties.Name="刷新漫画列表"
+                    Click="RefreshButton_Click"
+                    Icon="Refresh"
+                    Label="刷新" />
+            </CommandBar>
+
+            <Grid
+                x:Name="WorkbenchGrid"
+                Grid.Row="1"
+                ColumnSpacing="12"
+                RowSpacing="12">
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup>
+                        <VisualState x:Name="NarrowWorkbench">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="0" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter Target="ComicListColumn.Width" Value="*" />
+                                <Setter Target="EditorColumn.Width" Value="0" />
+                                <Setter Target="ComicListRow.Height" Value="240" />
+                                <Setter Target="EditorRow.Height" Value="*" />
+                                <Setter Target="ComicPane.(Grid.Column)" Value="0" />
+                                <Setter Target="ComicPane.(Grid.Row)" Value="0" />
+                                <Setter Target="EditorTabs.(Grid.Column)" Value="0" />
+                                <Setter Target="EditorTabs.(Grid.Row)" Value="1" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="WideWorkbench">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="900" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter Target="ComicListColumn.Width" Value="320" />
+                                <Setter Target="EditorColumn.Width" Value="*" />
+                                <Setter Target="ComicListRow.Height" Value="*" />
+                                <Setter Target="EditorRow.Height" Value="0" />
+                                <Setter Target="ComicPane.(Grid.Column)" Value="0" />
+                                <Setter Target="ComicPane.(Grid.Row)" Value="0" />
+                                <Setter Target="EditorTabs.(Grid.Column)" Value="1" />
+                                <Setter Target="EditorTabs.(Grid.Row)" Value="0" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="ComicListColumn" Width="320" />
+                    <ColumnDefinition x:Name="EditorColumn" Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition x:Name="ComicListRow" Height="*" />
+                    <RowDefinition x:Name="EditorRow" Height="0" />
+                </Grid.RowDefinitions>
+
+                <Border
+                    x:Name="ComicPane"
+                    Padding="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid RowSpacing="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock
+                            FontSize="18"
+                            FontWeight="SemiBold"
+                            Text="我的漫画" />
+                        <ListView
+                            x:Name="ComicList"
+                            Grid.Row="1"
+                            AutomationProperties.Name="我的漫画列表"
+                            ItemsSource="{x:Bind ViewModel.Comics, Mode=OneWay}"
+                            SelectionChanged="ComicList_SelectionChanged"
+                            SelectionMode="Single">
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="publishing:MyComicSummary">
+                                    <Grid
+                                        MinHeight="76"
+                                        Padding="4"
+                                        ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="52" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image
+                                            Width="52"
+                                            Height="70"
+                                            AutomationProperties.Name="{x:Bind Title}"
+                                            DataContextChanged="ComicCover_DataContextChanged"
+                                            Loaded="ComicCover_Loaded"
+                                            Stretch="UniformToFill" />
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Spacing="3">
+                                            <TextBlock
+                                                FontWeight="SemiBold"
+                                                MaxLines="2"
+                                                Text="{x:Bind Title}"
+                                                TextTrimming="CharacterEllipsis"
+                                                TextWrapping="Wrap" />
+                                            <TextBlock
+                                                FontSize="12"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Text="{x:Bind CategoryName}" />
+                                            <TextBlock
+                                                FontSize="12"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Text="{x:Bind LastUpdatedAt}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                        <Grid
+                            Grid.Row="2"
+                            ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button
+                                x:Name="DeleteComicButton"
+                                AutomationProperties.Name="删除选中的漫画"
+                                Click="DeleteComicButton_Click"
+                                Content="删除" />
+                            <TextBlock
+                                x:Name="PageNumberText"
+                                Grid.Column="1"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                AutomationProperties.LiveSetting="Polite" />
+                            <Button
+                                x:Name="PreviousPageButton"
+                                Grid.Column="3"
+                                AutomationProperties.Name="上一页"
+                                Click="PreviousPageButton_Click"
+                                Content="‹" />
+                            <Button
+                                x:Name="NextPageButton"
+                                Grid.Column="4"
+                                AutomationProperties.Name="下一页"
+                                Click="NextPageButton_Click"
+                                Content="›" />
+                        </Grid>
+                    </Grid>
+                </Border>
+
+                <TabView
+                    x:Name="EditorTabs"
+                    Grid.Column="1"
+                    AutomationProperties.Name="漫画编辑器"
+                    IsAddTabButtonVisible="False"
+                    TabWidthMode="SizeToContent">
+                    <TabViewItem Header="信息">
+                        <ScrollViewer>
+                            <StackPanel
+                                MaxWidth="760"
+                                Padding="16,8,16,24"
+                                HorizontalAlignment="Stretch"
+                                Spacing="12">
+                                <Image
+                                    x:Name="CoverPreviewImage"
+                                    Width="180"
+                                    Height="252"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.Name="漫画封面预览"
+                                    Stretch="UniformToFill" />
+                                <TextBox
+                                    x:Name="CoverTextBox"
+                                    AutomationProperties.Name="封面 HTTPS 地址"
+                                    Header="封面 HTTPS 地址"
+                                    Text="{x:Bind ViewModel.Editor.Cover, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button
+                                    x:Name="SelectCoverButton"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.Name="选择本地封面"
+                                    Click="SelectCoverButton_Click"
+                                    Content="选择本地封面" />
+                                <TextBox
+                                    AutomationProperties.Name="漫画标题"
+                                    Header="标题"
+                                    Text="{x:Bind ViewModel.Editor.Title, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox
+                                    AutomationProperties.Name="漫画作者"
+                                    Header="作者"
+                                    Text="{x:Bind ViewModel.Editor.Author, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox
+                                    MinHeight="112"
+                                    AcceptsReturn="True"
+                                    AutomationProperties.Name="漫画简介"
+                                    Header="简介"
+                                    Text="{x:Bind ViewModel.Editor.Introduction, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    TextWrapping="Wrap" />
+                                <ComboBox
+                                    x:Name="CategoryComboBox"
+                                    AutomationProperties.Name="漫画分类"
+                                    DisplayMemberPath="Name"
+                                    Header="分类"
+                                    ItemsSource="{x:Bind ViewModel.Editor.Categories, Mode=OneWay}"
+                                    SelectionChanged="CategoryComboBox_SelectionChanged" />
+                                <Button
+                                    x:Name="SaveInfoButton"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.Name="保存漫画信息"
+                                    Click="SaveInfoButton_Click"
+                                    Content="保存信息" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabViewItem>
+
+                    <TabViewItem Header="设置">
+                        <ScrollViewer>
+                            <StackPanel
+                                MaxWidth="760"
+                                Padding="16,8,16,24"
+                                HorizontalAlignment="Stretch"
+                                Spacing="12">
+                                <TextBlock FontWeight="SemiBold" Text="等级（0–6）" />
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="120" />
+                                    </Grid.ColumnDefinitions>
+                                    <Slider
+                                        x:Name="LevelSlider"
+                                        AutomationProperties.Name="漫画等级"
+                                        Maximum="6"
+                                        Minimum="0"
+                                        StepFrequency="1"
+                                        ValueChanged="LevelSlider_ValueChanged" />
+                                    <NumberBox
+                                        x:Name="LevelNumberBox"
+                                        Grid.Column="1"
+                                        AutomationProperties.Name="漫画等级数值"
+                                        Maximum="6"
+                                        Minimum="0"
+                                        SmallChange="1"
+                                        SpinButtonPlacementMode="Compact"
+                                        ValueChanged="LevelNumberBox_ValueChanged" />
+                                </Grid>
+                                <NumberBox
+                                    x:Name="InteriorLevelNumberBox"
+                                    AutomationProperties.Name="内部等级"
+                                    Header="内部等级"
+                                    Minimum="0"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="InteriorLevelNumberBox_ValueChanged" />
+                                <ToggleSwitch
+                                    x:Name="DownloadAllowedToggle"
+                                    AutomationProperties.Name="允许下载"
+                                    Header="下载"
+                                    IsOn="{x:Bind ViewModel.Editor.DownloadAllowed, Mode=TwoWay}"
+                                    OffContent="禁止"
+                                    OnContent="允许" />
+                                <NumberBox
+                                    x:Name="SubjectIdNumberBox"
+                                    AutomationProperties.Name="Subject ID"
+                                    Header="Subject ID（可空）"
+                                    Minimum="0"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="SubjectIdNumberBox_ValueChanged" />
+                                <NumberBox
+                                    x:Name="SeriesIdNumberBox"
+                                    AutomationProperties.Name="Series ID"
+                                    Header="Series ID（可空）"
+                                    Minimum="0"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValueChanged="SeriesIdNumberBox_ValueChanged" />
+                                <TextBox
+                                    AutomationProperties.Name="系列名"
+                                    Header="系列名"
+                                    Text="{x:Bind ViewModel.Editor.SeriesName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox
+                                    AutomationProperties.Name="系列中文名"
+                                    Header="系列中文名"
+                                    Text="{x:Bind ViewModel.Editor.SeriesNameCn, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox
+                                    x:Name="TagsTextBox"
+                                    AutomationProperties.Name="漫画标签"
+                                    Header="标签（用逗号分隔）"
+                                    PlaceholderText="奇幻, 冒险"
+                                    TextChanged="TagsTextBox_TextChanged" />
+                                <Button
+                                    x:Name="SaveSettingsButton"
+                                    HorizontalAlignment="Left"
+                                    AutomationProperties.Name="保存漫画设置"
+                                    Click="SaveSettingsButton_Click"
+                                    Content="保存设置" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabViewItem>
+
+                    <TabViewItem Header="分卷">
+                        <Grid
+                            Padding="12,8,12,16"
+                            ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid RowSpacing="8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Button
+                                    x:Name="NewChapterButton"
+                                    HorizontalAlignment="Stretch"
+                                    AutomationProperties.Name="新增章节"
+                                    Click="NewChapterButton_Click"
+                                    Content="新增章节" />
+                                <ListView
+                                    x:Name="ChapterList"
+                                    Grid.Row="1"
+                                    AutomationProperties.Name="章节列表"
+                                    ItemsSource="{x:Bind ViewModel.Editor.Chapters, Mode=OneWay}"
+                                    SelectionChanged="ChapterList_SelectionChanged"
+                                    SelectionMode="Single">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="publishing:ComicChapterSummary">
+                                            <StackPanel Padding="4" Spacing="2">
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
+                                                <TextBlock
+                                                    FontSize="12"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{x:Bind SortNum}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <Grid
+                                    Grid.Row="2"
+                                    ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button
+                                        x:Name="MoveChapterUpButton"
+                                        HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="章节上移"
+                                        Click="MoveChapterUpButton_Click"
+                                        Content="上移" />
+                                    <Button
+                                        x:Name="MoveChapterDownButton"
+                                        Grid.Column="1"
+                                        HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="章节下移"
+                                        Click="MoveChapterDownButton_Click"
+                                        Content="下移" />
+                                    <Button
+                                        x:Name="DeleteChapterButton"
+                                        Grid.Column="2"
+                                        HorizontalAlignment="Stretch"
+                                        AutomationProperties.Name="删除章节"
+                                        Click="DeleteChapterButton_Click"
+                                        Content="删除" />
+                                </Grid>
+                            </Grid>
+
+                            <ScrollViewer Grid.Column="1">
+                                <StackPanel
+                                    Padding="4,0,8,24"
+                                    Spacing="12">
+                                    <TextBlock
+                                        x:Name="NoChapterText"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="请选择章节或新增章节。" />
+                                    <StackPanel
+                                        x:Name="ChapterEditorPanel"
+                                        Spacing="12"
+                                        Visibility="Collapsed">
+                                        <TextBox
+                                            AutomationProperties.Name="章节标题"
+                                            Header="章节标题"
+                                            Text="{x:Bind ViewModel.Editor.ChapterTitle, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <NumberBox
+                                            x:Name="NewChapterSortNumberBox"
+                                            AutomationProperties.Name="新章节排序号"
+                                            Header="新章节排序号"
+                                            IsEnabled="False"
+                                            Minimum="1"
+                                            SpinButtonPlacementMode="Hidden"
+                                            Visibility="Collapsed" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button
+                                                x:Name="SelectChapterImagesButton"
+                                                AutomationProperties.Name="选择章节图片"
+                                                Click="SelectChapterImagesButton_Click"
+                                                Content="选择图片" />
+                                            <Button
+                                                x:Name="ClearChapterImagesButton"
+                                                Grid.Column="1"
+                                                AutomationProperties.Name="清空章节图片"
+                                                Click="ClearChapterImagesButton_Click"
+                                                Content="清空图片" />
+                                        </Grid>
+                                        <GridView
+                                            x:Name="ChapterImagesGridView"
+                                            AllowDrop="True"
+                                            AutomationProperties.Name="章节图片列表，可拖拽排序"
+                                            CanReorderItems="True"
+                                            DragItemsCompleted="ChapterImagesGridView_DragItemsCompleted"
+                                            DragItemsStarting="ChapterImagesGridView_DragItemsStarting"
+                                            ItemsSource="{x:Bind ViewModel.Editor.ChapterImages, Mode=OneWay}"
+                                            SelectionMode="None">
+                                            <GridView.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <ItemsWrapGrid
+                                                        ItemHeight="230"
+                                                        ItemWidth="156"
+                                                        Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </GridView.ItemsPanel>
+                                            <GridView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border
+                                                        Width="148"
+                                                        Height="222"
+                                                        Padding="6"
+                                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                        BorderThickness="1"
+                                                        CornerRadius="6">
+                                                        <Grid RowSpacing="5">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="166" />
+                                                                <RowDefinition Height="*" />
+                                                                <RowDefinition Height="Auto" />
+                                                            </Grid.RowDefinitions>
+                                                            <Image
+                                                                DataContextChanged="ChapterImage_DataContextChanged"
+                                                                Loaded="ChapterImage_Loaded"
+                                                                Stretch="UniformToFill" />
+                                                            <TextBlock
+                                                                Grid.Row="1"
+                                                                FontSize="11"
+                                                                Text="{Binding}"
+                                                                TextTrimming="CharacterEllipsis"
+                                                                TextWrapping="Wrap" />
+                                                            <Button
+                                                                Grid.Row="2"
+                                                                HorizontalAlignment="Stretch"
+                                                                AutomationProperties.Name="删除图片"
+                                                                Click="RemoveChapterImageButton_Click"
+                                                                Content="删除" />
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </GridView.ItemTemplate>
+                                        </GridView>
+                                        <Button
+                                            x:Name="SaveChapterButton"
+                                            HorizontalAlignment="Left"
+                                            AutomationProperties.Name="保存章节"
+                                            Click="SaveChapterButton_Click"
+                                            Content="保存章节" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </TabViewItem>
+                </TabView>
+            </Grid>
+        </Grid>
+    </Grid>
+</Page>

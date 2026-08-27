@@ -289,6 +289,7 @@ public sealed class ComicPublishingService : IComicPublishingService
         await semaphore.WaitAsync(cancellationToken);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var url = await _publishingApi.UploadImageAsync(
@@ -297,6 +298,11 @@ public sealed class ComicPublishingService : IComicPublishingService
                 successes[index] = new UploadedImage(file.FileName, url);
             }
             catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (AppException exception) when (
+                exception.Kind == AppErrorKind.Unauthorized)
             {
                 throw;
             }

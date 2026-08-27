@@ -8,6 +8,17 @@ namespace NovelM.Tests.Presentation;
 public sealed class ShellViewModelTests
 {
     [TestMethod]
+    public void Navigation_ExposesExpectedTagsAndMangaDefault()
+    {
+        var viewModel = new ShellViewModel();
+
+        CollectionAssert.AreEqual(
+            new[] { "manga", "publishing", "settings" },
+            viewModel.NavigationTags.ToArray());
+        Assert.AreEqual("manga", viewModel.DefaultNavigationTag);
+    }
+
+    [TestMethod]
     [DataRow(ConnectionState.Disconnected, "未连接")]
     [DataRow(ConnectionState.Connecting, "连接中")]
     [DataRow(ConnectionState.Connected, "已连接")]

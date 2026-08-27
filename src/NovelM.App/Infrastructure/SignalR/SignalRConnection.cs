@@ -170,7 +170,25 @@ internal sealed class SignalRConnection : ISignalRConnection
             }
 
             await RestartAsync(cancellationToken);
-            return await InvokeCoreAsync<T>(methodName, request, cancellationToken);
+            try
+            {
+                return await InvokeCoreAsync<T>(methodName, request, cancellationToken);
+            }
+            catch (Exception retryException) when (IsUnauthorized(retryException))
+            {
+                if (retryException is AppException
+                    {
+                        Kind: AppErrorKind.Unauthorized
+                    })
+                {
+                    throw;
+                }
+
+                throw new AppException(
+                    AppErrorKind.Unauthorized,
+                    "The authentication session remains unauthorized after refresh.",
+                    innerException: retryException);
+            }
         }
     }
 

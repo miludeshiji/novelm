@@ -4,13 +4,16 @@ using Microsoft.UI.Xaml.Controls;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Application.Auth;
 using NovelM_App.Application.Books;
+using NovelM_App.Application.Manga;
+using NovelM_App.Application.Publishing;
 using NovelM_App.Infrastructure.Configuration;
 using NovelM_App.Infrastructure.Http;
 using NovelM_App.Infrastructure.SignalR;
 using NovelM_App.Infrastructure.Storage;
 using NovelM_App.Presentation.Account;
-using NovelM_App.Presentation.BookProbe;
 using NovelM_App.Presentation.Common;
+using NovelM_App.Presentation.Manga;
+using NovelM_App.Presentation.Publishing;
 using NovelM_App.Presentation.Settings;
 using NovelM_App.Presentation.Shell;
 
@@ -27,6 +30,8 @@ public partial class App : Microsoft.UI.Xaml.Application
     }
 
     public static IServiceProvider Services { get; private set; } = null!;
+
+    internal static MainWindow MainWindow { get; private set; } = null!;
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -46,7 +51,8 @@ public partial class App : Microsoft.UI.Xaml.Application
                 .LoadAsync(CancellationToken.None);
 
             startupStage = "创建主窗口";
-            _window = Services.GetRequiredService<MainWindow>();
+            MainWindow = Services.GetRequiredService<MainWindow>();
+            _window = MainWindow;
             startupStage = "激活主窗口";
             _window.Activate();
 
@@ -89,13 +95,19 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<ISignalRConnection, SignalRConnection>();
         services.AddSingleton<IUserApi, SignalRUserApi>();
         services.AddSingleton<IBookApi, SignalRBookApi>();
+        services.AddSingleton<IMangaApi, SignalRMangaApi>();
+        services.AddSingleton<IComicPublishingApi, SignalRComicPublishingApi>();
         services.AddSingleton<IAuthService, AuthService>();
         services.AddSingleton<IBookService, BookService>();
+        services.AddSingleton<IMangaService, MangaService>();
+        services.AddSingleton<IComicPublishingService, ComicPublishingService>();
 
         services.AddSingleton<ErrorMessageMapper>();
         services.AddSingleton<ShellViewModel>();
         services.AddSingleton<AccountViewModel>();
-        services.AddSingleton<BookProbeViewModel>();
+        services.AddTransient<MangaViewModel>();
+        services.AddTransient<ComicEditorViewModel>();
+        services.AddTransient<PublishingViewModel>();
         services.AddSingleton(provider => new SettingsViewModel(
             provider.GetRequiredService<IApiServerManager>(),
             provider.GetRequiredService<IAuthSession>(),
@@ -104,7 +116,8 @@ public partial class App : Microsoft.UI.Xaml.Application
             provider.GetRequiredService<AppPaths>().DataDirectory));
 
         services.AddTransient<AccountPage>();
-        services.AddTransient<BookProbePage>();
+        services.AddTransient<MangaPage>();
+        services.AddTransient<PublishingPage>();
         services.AddTransient<SettingsPage>();
         services.AddSingleton<MainWindow>();
 

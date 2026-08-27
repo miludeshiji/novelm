@@ -43,9 +43,14 @@
                 </StackPanel>
             </NavigationView.Header>
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Name="BookItem" Content="书籍验证" Tag="book">
+                <NavigationViewItem x:Name="MangaItem" Content="漫画" Tag="manga">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE82D;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="PublishingItem" Content="发布管理" Tag="publishing">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE74D;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="设置" Tag="settings">
@@ -55,7 +60,7 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="账户" Tag="account">
+                <NavigationViewItem x:Name="AccountItem" Content="账户" Tag="account">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE77B;" />
                     </NavigationViewItem.Icon>

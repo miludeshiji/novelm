@@ -912,12 +912,13 @@ public sealed class SignalRConnectionTests
 
         try
         {
-            await Assert.ThrowsExactlyAsync<HubException>(() =>
+            var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
                 connection.InvokeAsync<UserProfileDto>(
                     HubMethodNames.GetMyInfo,
                     null,
                     CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
 
+            Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
             Assert.AreEqual(1, auth.InvalidateCount);
             Assert.AreEqual(1, auth.RefreshCount);
             Assert.AreEqual(2, host.State.InvocationCount);
