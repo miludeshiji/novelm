@@ -41,7 +41,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     private bool _infoHasUnsavedChanges;
     private bool _settingsHasUnsavedChanges;
     private bool _chapterHasUnsavedChanges;
-    private IReadOnlyList<FailedImage> _failedUploads = Array.Empty<FailedImage>();
     private bool _suppressDirty;
     private long _bookGeneration;
     private long _chapterGeneration;
@@ -286,7 +285,13 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     public ComicChapterSummary? SelectedChapter
     {
         get => _selectedChapter;
-        private set => SetProperty(ref _selectedChapter, value);
+        private set
+        {
+            if (SetProperty(ref _selectedChapter, value))
+            {
+                OnPropertyChanged(nameof(CanSaveChapter));
+            }
+        }
     }
 
     public string ChapterTitle
@@ -306,7 +311,13 @@ public sealed partial class ComicEditorViewModel : ObservableObject
     public bool IsCreatingChapter
     {
         get => _isCreatingChapter;
-        private set => SetProperty(ref _isCreatingChapter, value);
+        private set
+        {
+            if (SetProperty(ref _isCreatingChapter, value))
+            {
+                OnPropertyChanged(nameof(CanSaveChapter));
+            }
+        }
     }
 
     public int NewChapterSortNum
@@ -339,12 +350,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         || ChapterHasUnsavedChanges
         || HasPendingChapterImages
         || HasPendingBatchChapters;
-
-    public IReadOnlyList<FailedImage> FailedUploads
-    {
-        get => _failedUploads;
-        private set => SetProperty(ref _failedUploads, value);
-    }
 
     public async Task LoadAsync(
         long bookId,
@@ -412,7 +417,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
             NewChapterSortNum = 1;
         });
         SetAllDirty(false);
-        FailedUploads = Array.Empty<FailedImage>();
         ErrorMessage = null;
         NoticeMessage = null;
     }
@@ -589,7 +593,10 @@ public sealed partial class ComicEditorViewModel : ObservableObject
 
     public async Task SaveChapterAsync(CancellationToken cancellationToken)
     {
-        if (BookId is not long bookId || IsBusy || IsUploading)
+        if (BookId is not long bookId
+            || IsBusy
+            || IsUploading
+            || HasPendingChapterImages)
         {
             return;
         }
@@ -806,60 +813,59 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         }
     }
 
-    public Task UploadChapterImagesAsync(
-        IReadOnlyList<LocalImageSource> files,
+    public async Task UploadCoverAsync(
+        LocalImageSource source,
         CancellationToken cancellationToken)
     {
         if (!IsLoaded
             || BookId is not long bookId
-            || (SelectedChapter is null && !IsCreatingChapter))
+            || IsUploading
+            || IsBusy)
         {
-            return Task.CompletedTask;
-        }
-
-        var bookGeneration = CurrentBookGeneration;
-        var chapterGeneration = CurrentChapterGeneration;
-        var selectedChapterId = SelectedChapter?.Id;
-        var wasCreating = IsCreatingChapter;
-        return UploadAsync(
-            files,
-            () => IsCurrentChapterContext(
-                bookGeneration,
-                bookId,
-                chapterGeneration,
-                selectedChapterId,
-                wasCreating),
-            result =>
-            {
-                foreach (var uploaded in result.Successes)
-                {
-                    ChapterImages.Add(uploaded.Url);
-                }
-            },
-            cancellationToken);
-    }
-
-    public Task UploadCoverAsync(
-        LocalImageSource file,
-        CancellationToken cancellationToken)
-    {
-        if (!IsLoaded || BookId is not long bookId)
-        {
-            return Task.CompletedTask;
+            return;
         }
 
         var generation = CurrentBookGeneration;
-        return UploadAsync(
-            [file],
-            () => IsCurrentBookContext(generation, bookId),
-            result =>
+        IsUploading = true;
+        ErrorMessage = null;
+        NoticeMessage = null;
+        try
+        {
+            var result = await _publishingService.UploadImagesAsync(
+                [source],
+                cancellationToken);
+            if (!IsCurrentBookContext(generation, bookId))
             {
-                if (result.Successes.Count > 0)
-                {
-                    Cover = result.Successes[0].Url;
-                }
-            },
-            cancellationToken);
+                return;
+            }
+
+            var success = result.Successes.FirstOrDefault(
+                item => item.SourceId == source.Id);
+            if (success is not null)
+            {
+                Cover = success.Url;
+            }
+
+            var failure = result.Failures.FirstOrDefault(
+                item => item.SourceId == source.Id);
+            if (failure is not null)
+            {
+                NoticeMessage = $"封面上传失败：{failure.Message}";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            HandleFailure(exception, IsCurrentBookContext(generation, bookId));
+        }
+        finally
+        {
+            IsUploading = false;
+            NotifyUploadAvailabilityChanged();
+        }
     }
 
     public void RemoveChapterImageAt(int index)
@@ -887,50 +893,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         if (ChapterImages.Count > 0)
         {
             ChapterImages.Clear();
-        }
-    }
-
-    private async Task UploadAsync(
-        IReadOnlyList<LocalImageSource> files,
-        Func<bool> isContextCurrent,
-        Action<ImageUploadBatchResult> applySuccesses,
-        CancellationToken cancellationToken)
-    {
-        if (IsUploading || IsBusy)
-        {
-            return;
-        }
-
-        IsUploading = true;
-        ErrorMessage = null;
-        NoticeMessage = null;
-        FailedUploads = Array.Empty<FailedImage>();
-        try
-        {
-            var result = await _publishingService.UploadImagesAsync(files, cancellationToken);
-            if (!isContextCurrent())
-            {
-                return;
-            }
-
-            applySuccesses(result);
-            FailedUploads = result.Failures;
-            if (result.Failures.Count > 0)
-            {
-                NoticeMessage = $"以下图片上传失败：{string.Join("、", result.Failures.Select(x => x.FileName))}";
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            HandleFailure(exception, isContextCurrent());
-        }
-        finally
-        {
-            IsUploading = false;
         }
     }
 
@@ -962,7 +924,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
             IsLoaded = true;
         });
         SetAllDirty(false);
-        FailedUploads = Array.Empty<FailedImage>();
     }
 
     private void ApplyChapterDraft(

@@ -626,7 +626,7 @@ public sealed partial class PublishingPage : Page
                 return;
             }
 
-            await Editor.UploadChapterImagesAsync(localFiles, cancellation.Value);
+            Editor.StageChapterImages(localFiles);
         }
         catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
         {

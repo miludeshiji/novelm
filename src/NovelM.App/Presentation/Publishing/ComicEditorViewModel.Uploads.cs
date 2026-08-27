@@ -28,6 +28,12 @@ public sealed partial class ComicEditorViewModel
         && !IsBusy
         && !IsUploading;
 
+    public bool CanSaveChapter =>
+        (IsCreatingChapter || SelectedChapter is not null)
+        && !HasPendingChapterImages
+        && !IsBusy
+        && !IsUploading;
+
     public bool CanUploadBatchChapters =>
         HasPendingBatchChapters
         && PendingBatchChapters.All(
@@ -62,6 +68,59 @@ public sealed partial class ComicEditorViewModel
         {
             ChapterHasUnsavedChanges = true;
         }
+    }
+
+    public async Task UploadPendingChapterImagesAsync(
+        CancellationToken cancellationToken)
+    {
+        var targets = PendingChapterImages
+            .Where(item => item.State == ComicImageUploadState.Pending)
+            .ToArray();
+        await UploadCurrentChapterItemsAsync(targets, cancellationToken);
+    }
+
+    public async Task ReplaceFailedChapterImageAsync(
+        Guid imageId,
+        string fileName,
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        var item = PendingChapterImages.FirstOrDefault(
+            image => image.Id == imageId);
+        if (item is null || !item.CanReplace || IsBusy || IsUploading)
+        {
+            return;
+        }
+
+        item.Replace(fileName, filePath);
+        await UploadCurrentChapterItemsAsync([item], cancellationToken);
+    }
+
+    public void RemovePendingChapterImage(Guid imageId)
+    {
+        var item = PendingChapterImages.FirstOrDefault(
+            image => image.Id == imageId);
+        if (item is null || !item.CanRemove || IsUploading)
+        {
+            return;
+        }
+
+        PendingChapterImages.Remove(item);
+        SortAndRenumber(PendingChapterImages);
+        CommitPendingChapterImagesIfComplete();
+        NotifyUploadAvailabilityChanged();
+    }
+
+    public void ClearPendingChapterImages()
+    {
+        if (IsUploading
+            || PendingChapterImages.Any(item => !item.CanRemove))
+        {
+            return;
+        }
+
+        PendingChapterImages.Clear();
+        NotifyUploadAvailabilityChanged();
     }
 
     public void StageBatchChapters(
@@ -110,6 +169,7 @@ public sealed partial class ComicEditorViewModel
         UpdatePendingChapterImageSubscriptions(args);
         OnPropertyChanged(nameof(HasPendingChapterImages));
         OnPropertyChanged(nameof(CanUploadPendingChapterImages));
+        OnPropertyChanged(nameof(CanSaveChapter));
         OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 
@@ -172,6 +232,7 @@ public sealed partial class ComicEditorViewModel
             || args.PropertyName == nameof(PendingComicImage.State))
         {
             OnPropertyChanged(nameof(CanUploadPendingChapterImages));
+            OnPropertyChanged(nameof(CanSaveChapter));
             OnPropertyChanged(nameof(HasUnsavedChanges));
         }
     }
@@ -261,6 +322,147 @@ public sealed partial class ComicEditorViewModel
     {
         OnPropertyChanged(nameof(CanUploadPendingChapterImages));
         OnPropertyChanged(nameof(CanUploadBatchChapters));
+        OnPropertyChanged(nameof(CanSaveChapter));
+    }
+
+    private async Task UploadCurrentChapterItemsAsync(
+        IReadOnlyList<PendingComicImage> targets,
+        CancellationToken cancellationToken)
+    {
+        if (targets.Count == 0
+            || IsUploading
+            || IsBusy
+            || BookId is not long bookId
+            || (SelectedChapter is null && !IsCreatingChapter))
+        {
+            return;
+        }
+
+        var bookGeneration = CurrentBookGeneration;
+        var chapterGeneration = CurrentChapterGeneration;
+        var selectedChapterId = SelectedChapter?.Id;
+        var wasCreating = IsCreatingChapter;
+        IsUploading = true;
+        ErrorMessage = null;
+        NoticeMessage = null;
+        foreach (var item in targets)
+        {
+            item.BeginUpload();
+        }
+
+        try
+        {
+            var result = await _publishingService.UploadImagesAsync(
+                targets.Select(item => item.ToSource()).ToArray(),
+                cancellationToken);
+            if (!IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selectedChapterId,
+                    wasCreating))
+            {
+                return;
+            }
+
+            ApplyImageResults(targets, result);
+            CommitPendingChapterImagesIfComplete();
+            var failedNames = targets
+                .Where(item => item.State == ComicImageUploadState.Failed)
+                .Select(item => item.FileName)
+                .ToArray();
+            if (failedNames.Length > 0)
+            {
+                NoticeMessage = $"以下图片上传失败：{string.Join("、", failedNames)}";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selectedChapterId,
+                    wasCreating))
+            {
+                foreach (var item in targets.Where(
+                             item => item.State == ComicImageUploadState.Uploading))
+                {
+                    item.Replace(item.FileName, item.FilePath);
+                }
+            }
+
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var isContextCurrent = IsCurrentChapterContext(
+                bookGeneration,
+                bookId,
+                chapterGeneration,
+                selectedChapterId,
+                wasCreating);
+            HandleFailure(exception, isContextCurrent);
+            if (isContextCurrent)
+            {
+                var message = ErrorMessage ?? "上传失败";
+                foreach (var item in targets.Where(
+                             item => item.State == ComicImageUploadState.Uploading))
+                {
+                    item.Fail(message);
+                }
+            }
+        }
+        finally
+        {
+            IsUploading = false;
+            NotifyUploadAvailabilityChanged();
+        }
+    }
+
+    private static void ApplyImageResults(
+        IReadOnlyList<PendingComicImage> targets,
+        ImageUploadBatchResult result)
+    {
+        var byId = targets.ToDictionary(item => item.Id);
+        foreach (var success in result.Successes)
+        {
+            if (byId.TryGetValue(success.SourceId, out var item))
+            {
+                item.Complete(success.Url);
+            }
+        }
+
+        foreach (var failure in result.Failures)
+        {
+            if (byId.TryGetValue(failure.SourceId, out var item))
+            {
+                item.Fail(failure.Message);
+            }
+        }
+
+        foreach (var item in targets.Where(
+                     item => item.State == ComicImageUploadState.Uploading))
+        {
+            item.Fail("未返回上传结果");
+        }
+    }
+
+    private void CommitPendingChapterImagesIfComplete()
+    {
+        if (PendingChapterImages.Count == 0
+            || PendingChapterImages.Any(
+                item => item.State != ComicImageUploadState.Uploaded))
+        {
+            return;
+        }
+
+        foreach (var item in PendingChapterImages.OrderBy(item => item.Position))
+        {
+            ChapterImages.Add(item.UploadedUrl!);
+        }
+
+        PendingChapterImages.Clear();
     }
 
     private static string NormalizePath(string path) =>
