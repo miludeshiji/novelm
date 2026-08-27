@@ -935,6 +935,75 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task UploadCoverAsync_MatchingFailureKeepsCoverAndShowsNotice()
+    {
+        var source = Source("cover.jpg");
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                [],
+                [
+                    new FailedImage(
+                        "unrelated.jpg",
+                        "unrelated failure",
+                        Guid.NewGuid()),
+                    new FailedImage(
+                        source.FileName,
+                        "upload rejected",
+                        source.Id)
+                ]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var originalCover = viewModel.Cover;
+
+        await viewModel.UploadCoverAsync(source, CancellationToken.None);
+
+        Assert.AreEqual(originalCover, viewModel.Cover);
+        Assert.AreEqual("封面上传失败：upload rejected", viewModel.NoticeMessage);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
+    public async Task UploadCoverAsync_TransportFailureUsesMappedErrorAndResetsUploading()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => Task.FromException<ImageUploadBatchResult>(
+            new AppException(AppErrorKind.Transport, "unsafe"));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var originalCover = viewModel.Cover;
+
+        await viewModel.UploadCoverAsync(
+            Source("cover.jpg"),
+            CancellationToken.None);
+
+        Assert.AreEqual(originalCover, viewModel.Cover);
+        Assert.AreEqual(
+            "网络连接失败，请检查网络后重试。",
+            viewModel.ErrorMessage);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
+    public async Task UploadCoverAsync_CancellationRethrowsAndResetsUploading()
+    {
+        using var source = new CancellationTokenSource();
+        var service = LoadedService();
+        service.UploadHandler = (_, token) =>
+            Task.FromException<ImageUploadBatchResult>(
+                new OperationCanceledException(token));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var originalCover = viewModel.Cover;
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
+            viewModel.UploadCoverAsync(Source("cover.jpg"), source.Token));
+
+        Assert.AreEqual(originalCover, viewModel.Cover);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
     public async Task UploadCoverAsync_LoadAnotherBookWhilePending_LateSuccessDoesNotChangeNewBook()
     {
         var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
