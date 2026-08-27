@@ -9,7 +9,7 @@ using NovelM_App.Presentation.Common;
 
 namespace NovelM_App.Presentation.Publishing;
 
-public sealed class ComicEditorViewModel : ObservableObject
+public sealed partial class ComicEditorViewModel : ObservableObject
 {
     private const string ChapterDiscardNotice = "当前章节有未保存的更改，请先保存或确认放弃。";
 
@@ -321,7 +321,10 @@ public sealed class ComicEditorViewModel : ObservableObject
     }
 
     public bool HasUnsavedChanges =>
-        InfoHasUnsavedChanges || SettingsHasUnsavedChanges || ChapterHasUnsavedChanges;
+        InfoHasUnsavedChanges
+        || SettingsHasUnsavedChanges
+        || ChapterHasUnsavedChanges
+        || HasPendingBatchChapters;
 
     public IReadOnlyList<FailedImage> FailedUploads
     {
@@ -370,6 +373,7 @@ public sealed class ComicEditorViewModel : ObservableObject
     public void Clear()
     {
         AdvanceBookContext();
+        ClearPendingBatchChaptersCore();
         WithDirtySuppressed(() =>
         {
             BookId = null;
@@ -919,6 +923,7 @@ public sealed class ComicEditorViewModel : ObservableObject
     private void ApplyDetails(long bookId, UserProfile user, ComicEditDetails details)
     {
         AdvanceBookContext();
+        ClearPendingBatchChaptersCore();
         WithDirtySuppressed(() =>
         {
             BookId = bookId;
@@ -951,6 +956,7 @@ public sealed class ComicEditorViewModel : ObservableObject
         ComicChapterDraft draft)
     {
         AdvanceChapterContext();
+        ClearPendingChapterImagesCore();
         WithDirtySuppressed(() =>
         {
             SelectedChapter = chapter;
@@ -1049,6 +1055,7 @@ public sealed class ComicEditorViewModel : ObservableObject
 
     private void ClearChapterDraft()
     {
+        ClearPendingChapterImagesCore();
         SelectedChapter = null;
         ChapterTitle = string.Empty;
         ChapterImages.Clear();

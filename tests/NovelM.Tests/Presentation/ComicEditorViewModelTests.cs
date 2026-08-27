@@ -447,28 +447,124 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
-    public async Task UploadChapterImagesAsync_AppendsSuccessesAndKeepsPartialFailures()
+    public async Task StageChapterImages_SortsAndDoesNotUpload()
     {
         var service = LoadedService();
-        service.UploadHandler = (_, _) => Task.FromResult(
-            new ImageUploadBatchResult(
-                [new UploadedImage("1.jpg", "https://i/1.jpg"), new UploadedImage("3.jpg", "https://i/3.jpg")],
-                [new FailedImage("2.jpg", "failed") ]));
         var viewModel = CreateViewModel(service);
         await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
         Assert.IsTrue(viewModel.BeginNewChapter(false));
 
-        await viewModel.UploadChapterImagesAsync(
-            [File("3.jpg"), File("1.jpg"), File("2.jpg")],
-            CancellationToken.None);
+        viewModel.StageChapterImages(
+        [
+            Source("10.jpg", @"C:\a\10.jpg"),
+            Source("2.jpg", @"C:\a\2.jpg"),
+            Source("2-copy.jpg", @"C:\a\2.jpg")
+        ]);
 
         CollectionAssert.AreEqual(
-            new[] { "https://i/1.jpg", "https://i/3.jpg" },
-            viewModel.ChapterImages.ToArray());
-        CollectionAssert.AreEqual(new[] { "2.jpg" }, viewModel.FailedUploads.Select(x => x.FileName).ToArray());
-        StringAssert.Contains(viewModel.NoticeMessage, "2.jpg");
+            new[] { "2.jpg", "10.jpg" },
+            viewModel.PendingChapterImages.Select(item => item.FileName).ToArray());
+        Assert.AreEqual(0, service.UploadCalls);
         Assert.IsTrue(viewModel.ChapterHasUnsavedChanges);
-        Assert.IsFalse(viewModel.IsUploading);
+        Assert.IsTrue(viewModel.HasPendingChapterImages);
+    }
+
+    [TestMethod]
+    public async Task StageBatchChapters_SortsFoldersAndImagesWithoutChangingChapterDraft()
+    {
+        var service = LoadedService();
+        service.GetChapterHandler = (_, chapterId, _) => Task.FromResult(
+            new ComicChapterDraft(chapterId, "One", ["https://i/1.jpg"]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(viewModel.Chapters[0], false, CancellationToken.None);
+
+        viewModel.StageBatchChapters(
+        [
+            Folder("第10章", Source("10.jpg"), Source("2.jpg")),
+            Folder("第2章", Source("1.jpg"))
+        ]);
+
+        CollectionAssert.AreEqual(
+            new[] { "第2章", "第10章" },
+            viewModel.PendingBatchChapters.Select(item => item.Title).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "2.jpg", "10.jpg" },
+            viewModel.PendingBatchChapters[1].Images.Select(item => item.FileName).ToArray());
+        Assert.AreEqual(70L, viewModel.SelectedChapter?.Id);
+        Assert.IsTrue(viewModel.HasPendingBatchChapters);
+        Assert.IsTrue(viewModel.HasUnsavedChanges);
+        Assert.AreEqual(0, service.UploadCalls);
+    }
+
+    [TestMethod]
+    public void PendingComicImage_TransitionsAndReplacementKeepIdentityAndPosition()
+    {
+        var source = Source("1.jpg", @"C:\images\1.jpg");
+        var image = new PendingComicImage(source, 3);
+        var changedProperties = new List<string?>();
+        image.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        Assert.AreEqual(ComicImageUploadState.Pending, image.State);
+        Assert.AreEqual("待上传", image.StatusText);
+        Assert.IsTrue(image.CanRemove);
+        Assert.IsFalse(image.CanReplace);
+
+        image.BeginUpload();
+        Assert.AreEqual(ComicImageUploadState.Uploading, image.State);
+        Assert.AreEqual("上传中", image.StatusText);
+        Assert.IsFalse(image.CanRemove);
+
+        image.Complete("https://i/1.jpg");
+        Assert.AreEqual("https://i/1.jpg", image.UploadedUrl);
+        Assert.AreEqual("已上传", image.StatusText);
+
+        image.Fail("failed");
+        Assert.AreEqual("failed", image.ErrorMessage);
+        Assert.AreEqual("上传失败", image.StatusText);
+        Assert.IsTrue(image.CanRemove);
+        Assert.IsTrue(image.CanReplace);
+
+        image.Replace("replacement.png", @"C:\images\replacement.png");
+
+        Assert.AreEqual(source.Id, image.Id);
+        Assert.AreEqual(3, image.Position);
+        Assert.AreEqual("replacement.png", image.FileName);
+        Assert.AreEqual(@"C:\images\replacement.png", image.FilePath);
+        Assert.IsNull(image.UploadedUrl);
+        Assert.IsNull(image.ErrorMessage);
+        Assert.AreEqual(ComicImageUploadState.Pending, image.State);
+        Assert.AreEqual(image.Id, image.ToSource().Id);
+        CollectionAssert.Contains(changedProperties, nameof(PendingComicImage.CanRemove));
+        CollectionAssert.Contains(changedProperties, nameof(PendingComicImage.CanReplace));
+        CollectionAssert.Contains(changedProperties, nameof(PendingComicImage.StatusText));
+    }
+
+    [TestMethod]
+    public void PendingComicChapter_DerivedStateMatchesImagesAndErrors()
+    {
+        var image = new PendingComicImage(Source("1.jpg"), 0);
+        var chapter = new PendingComicChapter(
+            Guid.NewGuid(),
+            @"C:\chapters\第2章",
+            "第2章",
+            [image],
+            null);
+
+        Assert.AreEqual(ComicChapterUploadState.Ready, chapter.State);
+        Assert.AreEqual("待上传", chapter.StatusText);
+        Assert.IsTrue(chapter.HasValidImages);
+        Assert.IsFalse(chapter.AllImagesUploaded);
+        Assert.IsFalse(chapter.CanRetryCreate);
+
+        image.BeginUpload();
+        image.Complete("https://i/1.jpg");
+        chapter.State = ComicChapterUploadState.Failed;
+        chapter.ErrorMessage = "create failed";
+
+        Assert.IsTrue(chapter.AllImagesUploaded);
+        Assert.IsTrue(chapter.CanRetryCreate);
+        Assert.AreEqual("处理失败", chapter.StatusText);
     }
 
     [TestMethod]
@@ -897,8 +993,15 @@ public sealed class ComicEditorViewModelTests
     internal static UserProfile Profile(int interiorLevel = 3) =>
         new(7, "author", "avatar", "Creator", interiorLevel);
 
-    internal static LocalImageSource File(string name) =>
-        new(Guid.NewGuid(), name, $"C:\\images\\{name}");
+    internal static LocalImageSource Source(string name, string? path = null) =>
+        new(Guid.NewGuid(), name, path ?? $@"C:\images\{name}");
+
+    internal static LocalImageSource File(string name) => Source(name);
+
+    internal static LocalComicChapterSelection Folder(
+        string title,
+        params LocalImageSource[] images) =>
+        new($@"C:\chapters\{title}", title, images, null);
 
     internal static ComicEditDetails Details() => new(
         42,
