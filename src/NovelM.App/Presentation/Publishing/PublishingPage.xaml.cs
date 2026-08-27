@@ -249,8 +249,13 @@ public sealed partial class PublishingPage : Page
         await ExecuteAsync(ViewModel.NextPageAsync);
     }
 
-    private void AccountButton_Click(object sender, RoutedEventArgs args)
+    private async void AccountButton_Click(object sender, RoutedEventArgs args)
     {
+        if (!await ConfirmNavigationAwayAsync())
+        {
+            return;
+        }
+
         ViewModel.RequestAccountNavigation();
     }
 

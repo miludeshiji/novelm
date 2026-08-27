@@ -258,8 +258,22 @@ public sealed class ComicPublishingService : IComicPublishingService
         using var semaphore = new SemaphoreSlim(
             MaximumUploadConcurrency,
             MaximumUploadConcurrency);
+        using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
         var successes = new UploadedImage?[sortedFiles.Length];
         var failures = new FailedImage?[sortedFiles.Length];
+        AppException? firstUnauthorized = null;
+
+        void CancelForUnauthorized(AppException exception)
+        {
+            if (Interlocked.CompareExchange(
+                    ref firstUnauthorized,
+                    exception,
+                    null) is null)
+            {
+                batchCancellation.Cancel();
+            }
+        }
 
         var uploads = sortedFiles
             .Select((file, index) => UploadOneAsync(
@@ -268,10 +282,24 @@ public sealed class ComicPublishingService : IComicPublishingService
                 semaphore,
                 successes,
                 failures,
-                cancellationToken))
+                batchCancellation.Token,
+                CancelForUnauthorized))
             .ToArray();
 
-        await Task.WhenAll(uploads);
+        try
+        {
+            await Task.WhenAll(uploads);
+        }
+        catch
+        {
+            var unauthorized = Volatile.Read(ref firstUnauthorized);
+            if (unauthorized is not null)
+            {
+                throw unauthorized;
+            }
+
+            throw;
+        }
 
         return new ImageUploadBatchResult(
             successes.OfType<UploadedImage>().ToArray(),
@@ -284,7 +312,8 @@ public sealed class ComicPublishingService : IComicPublishingService
         SemaphoreSlim semaphore,
         UploadedImage?[] successes,
         FailedImage?[] failures,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<AppException> cancelForUnauthorized)
     {
         await semaphore.WaitAsync(cancellationToken);
         try
@@ -307,10 +336,7 @@ public sealed class ComicPublishingService : IComicPublishingService
             catch (AppException exception) when (
                 exception.Kind == AppErrorKind.Unauthorized)
             {
-                throw;
-            }
-            catch (UnauthorizedAccessException)
-            {
+                cancelForUnauthorized(exception);
                 throw;
             }
             catch (Exception exception)

@@ -384,7 +384,75 @@ public sealed class ComicPublishingServiceTests
 
         Assert.AreSame(unauthorized, exception);
         Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
-        Assert.AreEqual(3, api.UploadCallCount);
+        Assert.AreEqual(2, api.UploadCallCount);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ApiUnauthorizedCancelsBatchBeforeFourthReadAndPropagatesOriginal()
+    {
+        var unauthorized = new AppException(
+            AppErrorKind.Unauthorized,
+            "Sign in again.");
+        var threeWorkersStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedWorkers = 0;
+        var startedReadPaths = new ConcurrentQueue<string>();
+        var api = new FakeComicPublishingApi
+        {
+            UploadHandler = async (file, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref startedWorkers) == 3)
+                {
+                    threeWorkersStarted.TrySetResult();
+                }
+
+                await threeWorkersStarted.Task.WaitAsync(cancellationToken);
+                if (file.FileName == "2.jpg")
+                {
+                    throw unauthorized;
+                }
+
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return "unreachable";
+            }
+        };
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) =>
+            {
+                startedReadPaths.Enqueue(path);
+                return Task.FromResult<byte[]>([1, 2, 3]);
+            }
+        };
+        var service = new ComicPublishingService(api, reader);
+        using var cancellation = new CancellationTokenSource();
+        var files = new[] { File("1.jpg"), File("2.jpg"), File("3.jpg"), File("4.jpg") };
+        var upload = service.UploadImagesAsync(files, cancellation.Token);
+
+        try
+        {
+            var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+                upload.WaitAsync(TimeSpan.FromSeconds(2)));
+
+            Assert.AreSame(unauthorized, exception);
+            Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
+            Assert.AreEqual(3, api.UploadCallCount);
+            CollectionAssert.AreEquivalent(
+                files.Take(3).Select(file => file.FilePath).ToArray(),
+                startedReadPaths.ToArray());
+            Assert.IsFalse(startedReadPaths.Contains(files[3].FilePath));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            try
+            {
+                await upload;
+            }
+            catch (Exception)
+            {
+            }
+        }
     }
 
     [TestMethod]
@@ -631,9 +699,10 @@ public sealed class ComicPublishingServiceTests
     }
 
     [TestMethod]
-    public async Task UploadImagesAsync_ReaderUnauthorizedAccess_Propagates()
+    public async Task UploadImagesAsync_ReaderUnauthorizedAccess_ProducesFailedImage()
     {
         var unauthorized = new UnauthorizedAccessException("Cannot read image.");
+        var source = File("1.jpg");
         var api = new FakeComicPublishingApi();
         var reader = new FakeLocalImageReader
         {
@@ -641,11 +710,43 @@ public sealed class ComicPublishingServiceTests
         };
         var service = new ComicPublishingService(api, reader);
 
-        var exception = await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() =>
-            service.UploadImagesAsync([File("1.jpg")], CancellationToken.None));
+        var result = await service.UploadImagesAsync([source], CancellationToken.None);
 
-        Assert.AreSame(unauthorized, exception);
+        Assert.AreEqual(0, result.Successes.Count);
+        Assert.AreEqual(1, result.Failures.Count);
+        Assert.AreEqual(source.Id, result.Failures[0].SourceId);
+        Assert.AreEqual(unauthorized.Message, result.Failures[0].Message);
         Assert.AreEqual(0, api.UploadCallCount);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ReaderUnauthorizedAccessFailsOnlyThatImage()
+    {
+        var readable = File("1.jpg");
+        var unauthorized = File("2.jpg");
+        var api = new FakeComicPublishingApi();
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) => path == unauthorized.FilePath
+                ? Task.FromException<byte[]>(
+                    new UnauthorizedAccessException("Cannot read image."))
+                : Task.FromResult<byte[]>([1, 2, 3])
+        };
+        var service = new ComicPublishingService(api, reader);
+
+        var result = await service.UploadImagesAsync(
+            [unauthorized, readable],
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { readable.Id },
+            result.Successes.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { unauthorized.Id },
+            result.Failures.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "1.jpg" },
+            api.UploadedFileNames.ToArray());
     }
 
     [TestMethod]

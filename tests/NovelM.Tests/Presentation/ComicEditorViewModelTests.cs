@@ -470,6 +470,60 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task StageChapterImages_MultiplePendingSelectionsSortWholeQueueNaturally()
+    {
+        var service = LoadedService();
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+
+        viewModel.StageChapterImages([Source("10.jpg")]);
+        viewModel.StageChapterImages([Source("2.jpg")]);
+
+        CollectionAssert.AreEqual(
+            new[] { "2.jpg", "10.jpg" },
+            viewModel.PendingChapterImages.Select(item => item.FileName).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 0, 1 },
+            viewModel.PendingChapterImages.Select(item => item.Position).ToArray());
+        Assert.AreEqual(0, service.UploadCalls);
+    }
+
+    [TestMethod]
+    public async Task StageChapterImages_AfterPositionIsFrozenAppendsSortedGroupAndReplacementStaysInPlace()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                sources.Select(source => new UploadedImage(
+                    source.FileName,
+                    $"https://i/{source.FileName}",
+                    source.Id)).ToArray(),
+                []));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages([Source("10.jpg"), Source("2.jpg")]);
+        viewModel.PendingChapterImages[0].Complete("https://i/2.jpg");
+        var failed = viewModel.PendingChapterImages[1];
+        failed.Fail("failed");
+
+        viewModel.StageChapterImages([Source("4.jpg"), Source("3.jpg")]);
+        await viewModel.ReplaceFailedChapterImageAsync(
+            failed.Id,
+            "99.jpg",
+            @"C:\images\99.jpg",
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "2.jpg", "99.jpg", "3.jpg", "4.jpg" },
+            viewModel.PendingChapterImages.Select(item => item.FileName).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 0, 1, 2, 3 },
+            viewModel.PendingChapterImages.Select(item => item.Position).ToArray());
+    }
+
+    [TestMethod]
     public async Task UploadPendingChapterImages_PartialFailureKeepsWholeBatchOutOfChapter()
     {
         var service = LoadedService();
@@ -686,6 +740,144 @@ public sealed class ComicEditorViewModelTests
             new[] { "https://i/1.jpg", "https://i/3.jpg" },
             viewModel.ChapterImages.ToArray());
         Assert.AreEqual(0, viewModel.PendingChapterImages.Count);
+    }
+
+    [TestMethod]
+    public async Task RemovePendingChapterImage_WhenRemainingUploadedCommitClearsFailureNotice()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                sources
+                    .Where(source => source.FileName == "1.jpg")
+                    .Select(source => new UploadedImage(
+                        source.FileName,
+                        $"https://i/{source.FileName}",
+                        source.Id))
+                    .ToArray(),
+                sources
+                    .Where(source => source.FileName == "2.jpg")
+                    .Select(source => new FailedImage(
+                        source.FileName,
+                        "failed",
+                        source.Id))
+                    .ToArray()));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages([Source("1.jpg"), Source("2.jpg")]);
+        await viewModel.UploadPendingChapterImagesAsync(CancellationToken.None);
+        var failed = viewModel.PendingChapterImages.Single(
+            item => item.State == ComicImageUploadState.Failed);
+        StringAssert.Contains(viewModel.NoticeMessage, "2.jpg");
+
+        viewModel.RemovePendingChapterImage(failed.Id);
+
+        Assert.AreEqual(0, viewModel.PendingChapterImages.Count);
+        CollectionAssert.AreEqual(
+            new[] { "https://i/1.jpg" },
+            viewModel.ChapterImages.ToArray());
+        Assert.IsNull(viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
+    public async Task RemovePendingChapterImage_WithMultipleFailuresListsOnlyRemainingFailures()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                [],
+                sources.Select(source => new FailedImage(
+                    source.FileName,
+                    "failed",
+                    source.Id)).ToArray()));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages([Source("1.jpg"), Source("2.jpg")]);
+        await viewModel.UploadPendingChapterImagesAsync(CancellationToken.None);
+
+        viewModel.RemovePendingChapterImage(viewModel.PendingChapterImages[0].Id);
+
+        Assert.AreEqual("以下图片上传失败：2.jpg", viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
+    public async Task ReplaceFailedChapterImage_SuccessClearsFailureNotice()
+    {
+        var shouldFail = true;
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) =>
+        {
+            var source = sources.Single();
+            return Task.FromResult(shouldFail
+                ? new ImageUploadBatchResult(
+                    [],
+                    [new FailedImage(source.FileName, "failed", source.Id)])
+                : new ImageUploadBatchResult(
+                    [new UploadedImage(
+                        source.FileName,
+                        $"https://i/{source.FileName}",
+                        source.Id)],
+                    []));
+        };
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages([Source("1.jpg")]);
+        await viewModel.UploadPendingChapterImagesAsync(CancellationToken.None);
+        var failed = viewModel.PendingChapterImages.Single();
+        StringAssert.Contains(viewModel.NoticeMessage, "1.jpg");
+
+        shouldFail = false;
+        await viewModel.ReplaceFailedChapterImageAsync(
+            failed.Id,
+            "replacement.jpg",
+            @"C:\images\replacement.jpg",
+            CancellationToken.None);
+
+        Assert.AreEqual(0, viewModel.PendingChapterImages.Count);
+        Assert.IsNull(viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
+    public async Task ReplaceFailedChapterImage_DoesNotClearUnrelatedDuplicateNotice()
+    {
+        var shouldFail = true;
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) =>
+        {
+            var source = sources.Single();
+            return Task.FromResult(shouldFail
+                ? new ImageUploadBatchResult(
+                    [],
+                    [new FailedImage(source.FileName, "failed", source.Id)])
+                : new ImageUploadBatchResult(
+                    [new UploadedImage(
+                        source.FileName,
+                        $"https://i/{source.FileName}",
+                        source.Id)],
+                    []));
+        };
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages(
+            [Source("1.jpg", @"C:\images\1.jpg")]);
+        await viewModel.UploadPendingChapterImagesAsync(CancellationToken.None);
+        var failed = viewModel.PendingChapterImages.Single();
+        viewModel.StageChapterImages(
+            [Source("duplicate.jpg", @"c:\IMAGES\1.JPG")]);
+        Assert.AreEqual("已忽略 1 个重复路径。", viewModel.NoticeMessage);
+
+        shouldFail = false;
+        await viewModel.ReplaceFailedChapterImageAsync(
+            failed.Id,
+            "replacement.jpg",
+            @"C:\images\replacement.jpg",
+            CancellationToken.None);
+
+        Assert.AreEqual("已忽略 1 个重复路径。", viewModel.NoticeMessage);
     }
 
     [TestMethod]

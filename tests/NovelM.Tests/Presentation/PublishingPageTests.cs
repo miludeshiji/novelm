@@ -636,6 +636,26 @@ public sealed class PublishingPageTests
             StringComparison.Ordinal));
     }
 
+    [TestMethod]
+    public void AccountButtonHandler_ConfirmsBeforeRequestingNavigation()
+    {
+        var handler = ExtractSourceRange(
+            ReadPageSource(),
+            "private async void AccountButton_Click(",
+            "private async void ComicList_SelectionChanged(");
+
+        StringAssert.Contains(handler, "await ConfirmNavigationAwayAsync()");
+        StringAssert.Contains(handler, "ViewModel.RequestAccountNavigation();");
+        Assert.IsTrue(
+            handler.IndexOf(
+                "await ConfirmNavigationAwayAsync()",
+                StringComparison.Ordinal)
+            < handler.IndexOf(
+                "ViewModel.RequestAccountNavigation();",
+                StringComparison.Ordinal));
+        StringAssert.Contains(handler, "return;");
+    }
+
     private static string ReadPageSource()
     {
         var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;

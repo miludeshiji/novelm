@@ -9,6 +9,7 @@ namespace NovelM_App.Presentation.Publishing;
 
 public sealed partial class ComicEditorViewModel
 {
+    private const string ChapterImageUploadFailureNoticePrefix = "以下图片上传失败：";
     private readonly HashSet<PendingComicImage> _observedPendingChapterImages = [];
     private readonly HashSet<PendingComicChapter> _observedPendingBatchChapters = [];
     private UploadPropertiesSnapshot _uploadProperties;
@@ -103,6 +104,8 @@ public sealed partial class ComicEditorViewModel
             }
         }
 
+        var canSortEntireQueue = PendingChapterImages.All(
+            item => item.State == ComicImageUploadState.Pending);
         foreach (var source in additions.OrderBy(
                      item => item.FileName,
                      NaturalNameComparer.Instance))
@@ -110,6 +113,12 @@ public sealed partial class ComicEditorViewModel
             PendingChapterImages.Add(new PendingComicImage(
                 source,
                 PendingChapterImages.Count));
+        }
+
+        if (canSortEntireQueue && additions.Count > 0)
+        {
+            SortCollection(PendingChapterImages, item => item.FileName);
+            RenumberPositions(PendingChapterImages);
         }
 
         NoticeMessage = ignoredCount > 0
@@ -166,6 +175,7 @@ public sealed partial class ComicEditorViewModel
         }
 
         PendingChapterImages.Clear();
+        RefreshPendingChapterImageFailureNotice();
     }
 
     public void StageBatchChapters(
@@ -602,7 +612,6 @@ public sealed partial class ComicEditorViewModel
         var wasCreating = IsCreatingChapter;
         IsUploading = true;
         ErrorMessage = null;
-        NoticeMessage = null;
         foreach (var item in targets)
         {
             item.BeginUpload();
@@ -625,14 +634,6 @@ public sealed partial class ComicEditorViewModel
 
             ApplyImageResults(targets, result);
             CommitPendingChapterImagesIfComplete();
-            var failedNames = targets
-                .Where(item => item.State == ComicImageUploadState.Failed)
-                .Select(item => item.FileName)
-                .ToArray();
-            if (failedNames.Length > 0)
-            {
-                NoticeMessage = $"以下图片上传失败：{string.Join("、", failedNames)}";
-            }
         }
         catch (OperationCanceledException)
         {
@@ -673,6 +674,16 @@ public sealed partial class ComicEditorViewModel
         }
         finally
         {
+            if (IsCurrentChapterContext(
+                    bookGeneration,
+                    bookId,
+                    chapterGeneration,
+                    selectedChapterId,
+                    wasCreating))
+            {
+                RefreshPendingChapterImageFailureNotice();
+            }
+
             IsUploading = false;
         }
     }
@@ -1035,6 +1046,7 @@ public sealed partial class ComicEditorViewModel
             || PendingChapterImages.Any(
                 item => item.State != ComicImageUploadState.Uploaded))
         {
+            RefreshPendingChapterImageFailureNotice();
             return;
         }
 
@@ -1044,6 +1056,25 @@ public sealed partial class ComicEditorViewModel
         }
 
         PendingChapterImages.Clear();
+        RefreshPendingChapterImageFailureNotice();
+    }
+
+    private void RefreshPendingChapterImageFailureNotice()
+    {
+        var failedNames = PendingChapterImages
+            .Where(item => item.State == ComicImageUploadState.Failed)
+            .Select(item => item.FileName)
+            .ToArray();
+        if (failedNames.Length > 0)
+        {
+            NoticeMessage = $"{ChapterImageUploadFailureNoticePrefix}{string.Join("、", failedNames)}";
+        }
+        else if (NoticeMessage?.StartsWith(
+                     ChapterImageUploadFailureNoticePrefix,
+                     StringComparison.Ordinal) == true)
+        {
+            NoticeMessage = null;
+        }
     }
 
     private static string NormalizePath(string path) =>
