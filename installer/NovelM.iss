@@ -74,7 +74,7 @@ var
   ResultCode: Integer;
 begin
   PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Get-AppxPackage -Name ''Microsoft.WindowsAppRuntime.2.4'' | Where-Object { $_.Architecture -eq ''X64'' -and $_.Status -eq ''Ok'' }) { exit 0 } else { exit 1 }"';
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Get-AppxPackage -Name ''Microsoft.WindowsAppRuntime.2'' | Where-Object { $_.Architecture -eq ''X64'' -and $_.Status -eq ''Ok'' -and [Version]$_.Version -ge [Version]''2.4.0.0'' }) { exit 0 } else { exit 1 }"';
   Result := Exec(PowerShellPath, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
