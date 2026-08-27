@@ -2515,6 +2515,267 @@ public sealed class ComicEditorViewModelTests
         Assert.IsFalse(viewModel.IsCreatingChapter);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ClearDuringBatchUpload_LateResultDoesNotCreateOrRestoreQueue(
+        bool uploadSucceeds)
+    {
+        var source = Source("1.jpg");
+        var uploadCompletion = new TaskCompletionSource<ImageUploadBatchResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => uploadCompletion.Task;
+        service.CreateChapterHandler = (_, sortNum, draft, _) => Task.FromResult(
+            new CreateChapterResult(
+                88,
+                [.. Details().Chapters, new ComicChapterSummary(88, sortNum, draft.Title)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", source)]);
+
+        var upload = viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+        Assert.IsTrue(viewModel.IsUploading);
+        viewModel.Clear();
+        uploadCompletion.SetResult(uploadSucceeds
+            ? new ImageUploadBatchResult(
+                [new UploadedImage(source.FileName, "https://i/1.jpg", source.Id)],
+                [])
+            : new ImageUploadBatchResult([], []));
+        await upload;
+
+        Assert.IsNull(viewModel.BookId);
+        Assert.AreEqual(0, viewModel.PendingBatchChapters.Count);
+        Assert.AreEqual(0, service.CreateChapterCalls);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
+    public async Task ClearWhenBatchChapterStartsCreating_DoesNotCallCreate()
+    {
+        var service = LoadedService();
+        service.CreateChapterHandler = (_, sortNum, draft, _) => Task.FromResult(
+            new CreateChapterResult(
+                88,
+                [.. Details().Chapters, new ComicChapterSummary(88, sortNum, draft.Title)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("1.jpg"))]);
+        var chapter = viewModel.PendingBatchChapters.Single();
+        chapter.Images.Single().Complete("https://i/1.jpg");
+        chapter.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(PendingComicChapter.State)
+                && chapter.State == ComicChapterUploadState.CreatingChapter)
+            {
+                viewModel.Clear();
+            }
+        };
+
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+
+        Assert.IsNull(viewModel.BookId);
+        Assert.AreEqual(0, viewModel.PendingBatchChapters.Count);
+        Assert.AreEqual(0, service.CreateChapterCalls);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
+    public async Task PendingBatchSurvivesChapterSwitchButMarksAggregateDirty()
+    {
+        var service = LoadedService(ThreeChapterDetails());
+        service.GetChapterHandler = (_, chapterId, _) => Task.FromResult(
+            new ComicChapterDraft(
+                chapterId,
+                $"Chapter {chapterId}",
+                [$"https://i/{chapterId}.jpg"]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        await viewModel.SelectChapterAsync(
+            viewModel.Chapters[0],
+            false,
+            CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第4章", Source("1.jpg"))]);
+
+        var selected = await viewModel.SelectChapterAsync(
+            viewModel.Chapters[1],
+            false,
+            CancellationToken.None);
+
+        Assert.IsTrue(selected);
+        Assert.AreEqual(1, viewModel.PendingBatchChapters.Count);
+        Assert.IsFalse(viewModel.ChapterHasUnsavedChanges);
+        Assert.IsTrue(viewModel.HasUnsavedChanges);
+    }
+
+    [TestMethod]
+    public async Task UploadBatchChapters_UnauthorizedExpiresSessionOnceAndKeepsQueueRecoverable()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (_, _) => Task.FromException<ImageUploadBatchResult>(
+            new AppException(AppErrorKind.Unauthorized, "expired"));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("1.jpg"))]);
+        var expired = 0;
+        var globalErrorNotifications = 0;
+        viewModel.SessionExpired += (_, _) => expired++;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ComicEditorViewModel.ErrorMessage))
+            {
+                globalErrorNotifications++;
+            }
+        };
+
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+
+        var chapter = viewModel.PendingBatchChapters.Single();
+        Assert.AreEqual(1, expired);
+        Assert.AreEqual(1, globalErrorNotifications);
+        Assert.IsTrue(viewModel.HasPendingBatchChapters);
+        Assert.AreEqual(ComicImageUploadState.Pending, chapter.Images.Single().State);
+        Assert.AreEqual(ComicChapterUploadState.Ready, chapter.State);
+        Assert.IsTrue(viewModel.CanUploadBatchChapters);
+        Assert.IsFalse(viewModel.IsUploading);
+    }
+
+    [TestMethod]
+    public async Task StageChapterImages_DuplicatePathsReportOnlyCurrentIgnoredCount()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages(
+            [Source("1.jpg", @"C:\images\1.jpg")]);
+
+        Assert.IsNull(viewModel.NoticeMessage);
+
+        viewModel.StageChapterImages(
+        [
+            Source("existing-copy.jpg", @"c:\IMAGES\1.JPG"),
+            Source("2.jpg", @"C:\images\2.jpg"),
+            Source("2-copy.jpg", @"c:\IMAGES\2.JPG"),
+            Source("3.jpg", @"C:\images\3.jpg")
+        ]);
+
+        Assert.AreEqual(3, viewModel.PendingChapterImages.Count);
+        Assert.AreEqual("已忽略 2 个重复路径。", viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
+    public async Task StageBatchChapters_DuplicateFoldersReportOnlyCurrentIgnoredCount()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+            [Folder("第1章", Source("1.jpg"))]);
+
+        Assert.IsNull(viewModel.NoticeMessage);
+
+        viewModel.StageBatchChapters(
+        [
+            new LocalComicChapterSelection(
+                @"c:\CHAPTERS\第1章",
+                "第1章副本",
+                [Source("existing-copy.jpg")],
+                null),
+            new LocalComicChapterSelection(
+                @"C:\chapters\第2章",
+                "第2章",
+                [Source("2.jpg")],
+                null),
+            new LocalComicChapterSelection(
+                @"c:\CHAPTERS\第2章",
+                "第2章副本",
+                [Source("2-copy.jpg")],
+                null),
+            Folder("第3章", Source("3.jpg"))
+        ]);
+
+        CollectionAssert.AreEqual(
+            new[] { "第1章", "第2章", "第3章" },
+            viewModel.PendingBatchChapters.Select(chapter => chapter.Title).ToArray());
+        Assert.AreEqual("已忽略 2 个重复路径。", viewModel.NoticeMessage);
+    }
+
+    [TestMethod]
+    public async Task SingleImageResultFailureStaysLocalAndDoesNotExpireSession()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                [],
+                [new FailedImage(sources.Single().FileName, "rejected", sources.Single().Id)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        viewModel.StageChapterImages([Source("bad.jpg")]);
+        var expired = 0;
+        viewModel.SessionExpired += (_, _) => expired++;
+
+        await viewModel.UploadPendingChapterImagesAsync(CancellationToken.None);
+
+        var image = viewModel.PendingChapterImages.Single();
+        Assert.AreEqual("rejected", image.ErrorMessage);
+        StringAssert.Contains(viewModel.NoticeMessage, "bad.jpg");
+        Assert.IsNull(viewModel.ErrorMessage);
+        Assert.AreEqual(0, expired);
+    }
+
+    [TestMethod]
+    public async Task BatchImageResultFailureStaysLocalAndDoesNotExpireSession()
+    {
+        var service = LoadedService();
+        service.UploadHandler = (sources, _) => Task.FromResult(
+            new ImageUploadBatchResult(
+                [],
+                [new FailedImage(sources.Single().FileName, "rejected", sources.Single().Id)]));
+        var viewModel = CreateViewModel(service);
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters([Folder("第2章", Source("bad.jpg"))]);
+        var expired = 0;
+        viewModel.SessionExpired += (_, _) => expired++;
+
+        await viewModel.UploadBatchChaptersAsync(CancellationToken.None);
+
+        var chapter = viewModel.PendingBatchChapters.Single();
+        Assert.AreEqual("rejected", chapter.Images.Single().ErrorMessage);
+        StringAssert.Contains(chapter.ErrorMessage, "bad.jpg");
+        Assert.IsNull(viewModel.NoticeMessage);
+        Assert.IsNull(viewModel.ErrorMessage);
+        Assert.AreEqual(0, expired);
+    }
+
+    [TestMethod]
+    public async Task UploadQueueChangesNotifyCompleteDerivedPropertySet()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        Assert.IsTrue(viewModel.BeginNewChapter(false));
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.PendingChapterImages.Add(
+            new PendingComicImage(Source("1.jpg"), 0));
+
+        var expected = new[]
+        {
+            nameof(ComicEditorViewModel.HasPendingChapterImages),
+            nameof(ComicEditorViewModel.HasPendingBatchChapters),
+            nameof(ComicEditorViewModel.CanUploadPendingChapterImages),
+            nameof(ComicEditorViewModel.CanUploadBatchChapters),
+            nameof(ComicEditorViewModel.CanSaveChapter),
+            nameof(ComicEditorViewModel.BatchProgressText),
+            nameof(ComicEditorViewModel.ChapterHasUnsavedChanges),
+            nameof(ComicEditorViewModel.HasUnsavedChanges)
+        };
+        foreach (var propertyName in expected)
+        {
+            CollectionAssert.Contains(changedProperties, propertyName);
+        }
+    }
+
     internal static ComicEditorViewModel CreateViewModel(IComicPublishingService service) =>
         new(service, new ErrorMessageMapper());
 

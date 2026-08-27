@@ -89,11 +89,16 @@ public sealed partial class ComicEditorViewModel
             .Select(item => NormalizePath(item.FilePath))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var additions = new List<LocalImageSource>();
+        var ignoredCount = 0;
         foreach (var source in sources)
         {
             if (paths.Add(NormalizePath(source.FilePath)))
             {
                 additions.Add(source);
+            }
+            else
+            {
+                ignoredCount++;
             }
         }
 
@@ -104,6 +109,11 @@ public sealed partial class ComicEditorViewModel
             PendingChapterImages.Add(new PendingComicImage(
                 source,
                 PendingChapterImages.Count));
+        }
+
+        if (ignoredCount > 0)
+        {
+            NoticeMessage = $"已忽略 {ignoredCount} 个重复路径。";
         }
     }
 
@@ -145,7 +155,6 @@ public sealed partial class ComicEditorViewModel
         PendingChapterImages.Remove(item);
         RenumberPositions(PendingChapterImages);
         CommitPendingChapterImagesIfComplete();
-        NotifyUploadAvailabilityChanged();
     }
 
     public void ClearPendingChapterImages()
@@ -157,7 +166,6 @@ public sealed partial class ComicEditorViewModel
         }
 
         PendingChapterImages.Clear();
-        NotifyUploadAvailabilityChanged();
     }
 
     public void StageBatchChapters(
@@ -171,10 +179,12 @@ public sealed partial class ComicEditorViewModel
         var folders = PendingBatchChapters
             .Select(chapter => NormalizePath(chapter.FolderPath))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ignoredCount = 0;
         foreach (var selection in selections)
         {
             if (!folders.Add(NormalizePath(selection.FolderPath)))
             {
+                ignoredCount++;
                 continue;
             }
 
@@ -191,6 +201,10 @@ public sealed partial class ComicEditorViewModel
         }
 
         SortCollection(PendingBatchChapters, chapter => chapter.Title);
+        if (ignoredCount > 0)
+        {
+            NoticeMessage = $"已忽略 {ignoredCount} 个重复路径。";
+        }
     }
 
     public Task UploadBatchChaptersAsync(CancellationToken cancellationToken)
@@ -368,11 +382,7 @@ public sealed partial class ComicEditorViewModel
         NotifyCollectionChangedEventArgs args)
     {
         UpdatePendingChapterImageSubscriptions(args);
-        OnPropertyChanged(nameof(HasPendingChapterImages));
-        OnPropertyChanged(nameof(CanUploadPendingChapterImages));
-        OnPropertyChanged(nameof(CanSaveChapter));
-        OnPropertyChanged(nameof(ChapterHasUnsavedChanges));
-        OnPropertyChanged(nameof(HasUnsavedChanges));
+        RefreshUploadProperties();
     }
 
     private void UpdatePendingChapterImageSubscriptions(
@@ -433,9 +443,7 @@ public sealed partial class ComicEditorViewModel
         if (string.IsNullOrEmpty(args.PropertyName)
             || args.PropertyName == nameof(PendingComicImage.State))
         {
-            OnPropertyChanged(nameof(CanUploadPendingChapterImages));
-            OnPropertyChanged(nameof(CanSaveChapter));
-            OnPropertyChanged(nameof(HasUnsavedChanges));
+            RefreshUploadProperties();
         }
     }
 
@@ -444,10 +452,7 @@ public sealed partial class ComicEditorViewModel
         NotifyCollectionChangedEventArgs args)
     {
         UpdatePendingBatchChapterSubscriptions(args);
-        OnPropertyChanged(nameof(HasPendingBatchChapters));
-        OnPropertyChanged(nameof(CanUploadBatchChapters));
-        OnPropertyChanged(nameof(BatchProgressText));
-        OnPropertyChanged(nameof(HasUnsavedChanges));
+        RefreshUploadProperties();
     }
 
     private void UpdatePendingBatchChapterSubscriptions(
@@ -508,10 +513,7 @@ public sealed partial class ComicEditorViewModel
         if (string.IsNullOrEmpty(args.PropertyName)
             || args.PropertyName == nameof(PendingComicChapter.State))
         {
-            OnPropertyChanged(nameof(HasPendingBatchChapters));
-            OnPropertyChanged(nameof(CanUploadBatchChapters));
-            OnPropertyChanged(nameof(BatchProgressText));
-            OnPropertyChanged(nameof(HasUnsavedChanges));
+            RefreshUploadProperties();
             return;
         }
 
@@ -519,16 +521,20 @@ public sealed partial class ComicEditorViewModel
             or nameof(PendingComicChapter.HasValidImages)
             or nameof(PendingComicChapter.AllImagesUploaded))
         {
-            OnPropertyChanged(nameof(CanUploadBatchChapters));
-            OnPropertyChanged(nameof(BatchProgressText));
+            RefreshUploadProperties();
         }
     }
 
-    private void NotifyUploadAvailabilityChanged()
+    private void RefreshUploadProperties()
     {
+        OnPropertyChanged(nameof(HasPendingChapterImages));
+        OnPropertyChanged(nameof(HasPendingBatchChapters));
         OnPropertyChanged(nameof(CanUploadPendingChapterImages));
         OnPropertyChanged(nameof(CanUploadBatchChapters));
         OnPropertyChanged(nameof(CanSaveChapter));
+        OnPropertyChanged(nameof(BatchProgressText));
+        OnPropertyChanged(nameof(ChapterHasUnsavedChanges));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 
     private async Task UploadCurrentChapterItemsAsync(
@@ -622,7 +628,6 @@ public sealed partial class ComicEditorViewModel
         finally
         {
             IsUploading = false;
-            NotifyUploadAvailabilityChanged();
         }
     }
 
@@ -736,7 +741,6 @@ public sealed partial class ComicEditorViewModel
         finally
         {
             IsUploading = false;
-            NotifyUploadAvailabilityChanged();
         }
     }
 
@@ -749,6 +753,11 @@ public sealed partial class ComicEditorViewModel
         foreach (var chapter in PendingBatchChapters.Where(
                      item => item.State != ComicChapterUploadState.Completed))
         {
+            if (!IsCurrentBookContext(generation, bookId))
+            {
+                return;
+            }
+
             if (chapter.HasSelectionError)
             {
                 chapter.State = ComicChapterUploadState.Failed;
@@ -778,6 +787,11 @@ public sealed partial class ComicEditorViewModel
 
             chapter.State = ComicChapterUploadState.CreatingChapter;
             chapter.ErrorMessage = null;
+            if (!IsCurrentBookContext(generation, bookId))
+            {
+                return;
+            }
+
             var draft = new ComicChapterDraft(
                 0,
                 chapter.Title,

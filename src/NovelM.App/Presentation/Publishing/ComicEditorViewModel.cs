@@ -77,7 +77,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _isBusy, value))
             {
-                NotifyUploadAvailabilityChanged();
+                RefreshUploadProperties();
             }
         }
     }
@@ -89,7 +89,7 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         {
             if (SetProperty(ref _isUploading, value))
             {
-                NotifyUploadAvailabilityChanged();
+                RefreshUploadProperties();
             }
         }
     }
@@ -863,7 +863,6 @@ public sealed partial class ComicEditorViewModel : ObservableObject
         finally
         {
             IsUploading = false;
-            NotifyUploadAvailabilityChanged();
         }
     }
 

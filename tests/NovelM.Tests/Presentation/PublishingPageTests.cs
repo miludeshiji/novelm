@@ -608,6 +608,34 @@ public sealed class PublishingPageTests
             @"C:\images\2.jpg"));
     }
 
+    [TestMethod]
+    public void NavigationGuards_UseBookDirtyStateExceptForChapterSwitches()
+    {
+        var pageSource = ReadPageSource();
+        var navigationAway = ExtractSourceRange(
+            pageSource,
+            "public async Task<bool> ConfirmNavigationAwayAsync()",
+            "private ComicEditorViewModel Editor =>");
+        var comicSelection = ExtractSourceRange(
+            pageSource,
+            "private async void ComicList_SelectionChanged(",
+            "private async void CreateComicButton_Click(");
+        var chapterSelection = ExtractSourceRange(
+            pageSource,
+            "private async void ChapterList_SelectionChanged(",
+            "private async void NewChapterButton_Click(");
+
+        StringAssert.Contains(navigationAway, "Editor.HasUnsavedChanges");
+        StringAssert.Contains(comicSelection, "Editor.HasUnsavedChanges");
+        Assert.IsFalse(comicSelection.Contains(
+            "Editor.ChapterHasUnsavedChanges",
+            StringComparison.Ordinal));
+        StringAssert.Contains(chapterSelection, "Editor.ChapterHasUnsavedChanges");
+        Assert.IsFalse(chapterSelection.Contains(
+            "Editor.HasUnsavedChanges",
+            StringComparison.Ordinal));
+    }
+
     private static string ReadPageSource()
     {
         var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
