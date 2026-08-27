@@ -62,6 +62,6 @@ public interface IComicPublishingService
         CancellationToken cancellationToken);
 
     Task<ImageUploadBatchResult> UploadImagesAsync(
-        IReadOnlyList<LocalImageFile> files,
+        IReadOnlyList<LocalImageSource> files,
         CancellationToken cancellationToken);
 }

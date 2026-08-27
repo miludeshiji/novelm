@@ -22,7 +22,7 @@ public sealed class ComicPublishingServiceTests
                 4,
                 9)
         };
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         using var cancellation = new CancellationTokenSource();
 
         var result = await service.GetMyComicsAsync(
@@ -47,7 +47,7 @@ public sealed class ComicPublishingServiceTests
     public async Task CreateComicAsync_InvalidCover_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = ValidCreateDraft() with { Cover = "http://cover" };
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -71,7 +71,7 @@ public sealed class ComicPublishingServiceTests
         string categoryName)
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = new CreateComicDraft(
             cover,
             title,
@@ -90,7 +90,7 @@ public sealed class ComicPublishingServiceTests
     public async Task CreateComicAsync_UnknownCategory_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = ValidCreateDraft() with { CategoryName = "未知" };
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -106,7 +106,7 @@ public sealed class ComicPublishingServiceTests
     public async Task UpdateSettingsAsync_LevelOutsideZeroToSix_ThrowsValidation(int level)
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = ValidSettingsDraft() with { Level = level };
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -120,7 +120,7 @@ public sealed class ComicPublishingServiceTests
     public async Task UpdateSettingsAsync_InteriorLevelAboveUserMaximum_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = ValidSettingsDraft() with { InteriorLevel = 4 };
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -136,7 +136,7 @@ public sealed class ComicPublishingServiceTests
     public async Task GetEditDetailsAsync_InvalidBookId_ThrowsValidation(long bookId)
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
             service.GetEditDetailsAsync(bookId, CancellationToken.None));
@@ -149,7 +149,7 @@ public sealed class ComicPublishingServiceTests
     public async Task CreateChapterAsync_WithoutImages_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = new ComicChapterDraft(0, "Chapter", []);
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -163,7 +163,7 @@ public sealed class ComicPublishingServiceTests
     public async Task UpdateChapterAsync_WithoutImages_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = new ComicChapterDraft(70, "Chapter", []);
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -178,7 +178,7 @@ public sealed class ComicPublishingServiceTests
     public async Task CreateChapterAsync_BlankImage_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = new ComicChapterDraft(0, "Chapter", ["image-1", "   "]);
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -193,7 +193,7 @@ public sealed class ComicPublishingServiceTests
     public async Task UpdateChapterAsync_BlankImage_ThrowsValidation()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         var draft = new ComicChapterDraft(70, "Chapter", ["image-1", "   "]);
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
@@ -208,18 +208,18 @@ public sealed class ComicPublishingServiceTests
     public async Task UploadImagesAsync_UsesNaturalOrderAndAtMostThreeWorkers()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var reader = new FakeLocalImageReader();
+        var service = new ComicPublishingService(api, reader);
         var currentConcurrency = 0;
         var maximumConcurrency = 0;
-        api.UploadHandler = async (file, cancellationToken) =>
+        reader.ReadHandler = async (_, cancellationToken) =>
         {
             var current = Interlocked.Increment(ref currentConcurrency);
             UpdateMaximum(ref maximumConcurrency, current);
             try
             {
-                var number = int.Parse(Path.GetFileNameWithoutExtension(file.FileName));
-                await Task.Delay((11 - number) * 5, cancellationToken);
-                return $"https://images.example/{file.FileName}";
+                await Task.Delay(50, cancellationToken);
+                return [1, 2, 3];
             }
             finally
             {
@@ -227,8 +227,9 @@ public sealed class ComicPublishingServiceTests
             }
         };
 
+        var files = new[] { File("10.jpg"), File("2.jpg"), File("1.jpg"), File("3.jpg") };
         var result = await service.UploadImagesAsync(
-            [File("10.jpg"), File("2.jpg"), File("1.jpg"), File("3.jpg")],
+            files,
             CancellationToken.None);
 
         CollectionAssert.AreEqual(
@@ -237,6 +238,9 @@ public sealed class ComicPublishingServiceTests
         Assert.AreEqual(0, result.Failures.Count);
         Assert.IsLessThanOrEqualTo(3, maximumConcurrency);
         Assert.AreEqual(3, maximumConcurrency);
+        CollectionAssert.AreEqual(
+            new[] { files[2].Id, files[1].Id, files[3].Id, files[0].Id },
+            result.Successes.Select(item => item.SourceId).ToArray());
     }
 
     [TestMethod]
@@ -244,7 +248,7 @@ public sealed class ComicPublishingServiceTests
     {
         const string oversizedFileName = "999999999999999999999.png";
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var result = await service.UploadImagesAsync(
             [File(oversizedFileName), File("2.png")],
@@ -271,7 +275,7 @@ public sealed class ComicPublishingServiceTests
     {
         const string oversizedFileName = "100000000000000000000.png";
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var result = await service.UploadImagesAsync(
             [File(first), File(second), File(third)],
@@ -287,7 +291,7 @@ public sealed class ComicPublishingServiceTests
     {
         const string fileName = " 2.png ";
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var result = await service.UploadImagesAsync(
             [File(fileName)],
@@ -311,7 +315,7 @@ public sealed class ComicPublishingServiceTests
                 ? Task.FromException<string>(new InvalidOperationException($"failed {file.FileName}"))
                 : Task.FromResult($"https://images.example/{file.FileName}")
         };
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var result = await service.UploadImagesAsync(
             [File("10.jpg"), File("2.jpg"), File("1.jpg"), File("3.jpg")],
@@ -326,6 +330,33 @@ public sealed class ComicPublishingServiceTests
         CollectionAssert.AreEqual(
             new[] { "failed 2.jpg", "failed 10.jpg" },
             result.Failures.Select(item => item.Message).ToArray());
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ReadFailure_ProducesOnlyThatSourceFailure()
+    {
+        var unreadable = File("2.jpg");
+        var readable = File("1.jpg");
+        var api = new FakeComicPublishingApi();
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) => path == unreadable.FilePath
+                ? Task.FromException<byte[]>(new IOException("cannot read"))
+                : Task.FromResult<byte[]>([1, 2, 3])
+        };
+        var service = new ComicPublishingService(api, reader);
+
+        var result = await service.UploadImagesAsync(
+            [unreadable, readable],
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { readable.Id },
+            result.Successes.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { unreadable.Id },
+            result.Failures.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(new[] { "1.jpg" }, api.UploadedFileNames.ToArray());
     }
 
     [TestMethod]
@@ -344,7 +375,7 @@ public sealed class ComicPublishingServiceTests
                 _ => Task.FromResult($"https://images.example/{file.FileName}")
             }
         };
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
             service.UploadImagesAsync(
@@ -353,14 +384,82 @@ public sealed class ComicPublishingServiceTests
 
         Assert.AreSame(unauthorized, exception);
         Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
-        Assert.AreEqual(3, api.UploadCallCount);
+        Assert.AreEqual(2, api.UploadCallCount);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ApiUnauthorizedCancelsBatchBeforeFourthReadAndPropagatesOriginal()
+    {
+        var unauthorized = new AppException(
+            AppErrorKind.Unauthorized,
+            "Sign in again.");
+        var threeWorkersStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedWorkers = 0;
+        var startedReadPaths = new ConcurrentQueue<string>();
+        var api = new FakeComicPublishingApi
+        {
+            UploadHandler = async (file, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref startedWorkers) == 3)
+                {
+                    threeWorkersStarted.TrySetResult();
+                }
+
+                await threeWorkersStarted.Task.WaitAsync(cancellationToken);
+                if (file.FileName == "2.jpg")
+                {
+                    throw unauthorized;
+                }
+
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return "unreachable";
+            }
+        };
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) =>
+            {
+                startedReadPaths.Enqueue(path);
+                return Task.FromResult<byte[]>([1, 2, 3]);
+            }
+        };
+        var service = new ComicPublishingService(api, reader);
+        using var cancellation = new CancellationTokenSource();
+        var files = new[] { File("1.jpg"), File("2.jpg"), File("3.jpg"), File("4.jpg") };
+        var upload = service.UploadImagesAsync(files, cancellation.Token);
+
+        try
+        {
+            var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+                upload.WaitAsync(TimeSpan.FromSeconds(2)));
+
+            Assert.AreSame(unauthorized, exception);
+            Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
+            Assert.AreEqual(3, api.UploadCallCount);
+            CollectionAssert.AreEquivalent(
+                files.Take(3).Select(file => file.FilePath).ToArray(),
+                startedReadPaths.ToArray());
+            Assert.IsFalse(startedReadPaths.Contains(files[3].FilePath));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            try
+            {
+                await upload;
+            }
+            catch (Exception)
+            {
+            }
+        }
     }
 
     [TestMethod]
     public async Task PublishingOperations_ValidInputs_DelegateNormalizedValues()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         using var cancellation = new CancellationTokenSource();
 
         var newBookId = await service.CreateComicAsync(
@@ -433,7 +532,7 @@ public sealed class ComicPublishingServiceTests
     public async Task ChapterOperations_ValidInputs_DelegateNormalizedValues()
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
         using var cancellation = new CancellationTokenSource();
 
         var chapter = await service.GetChapterAsync(42, 70, cancellation.Token);
@@ -501,7 +600,7 @@ public sealed class ComicPublishingServiceTests
     public async Task InvalidArguments_ThrowValidationBeforeApi(string scenario)
     {
         var api = new FakeComicPublishingApi();
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         Task Action() => scenario switch
         {
@@ -593,10 +692,61 @@ public sealed class ComicPublishingServiceTests
             UploadHandler = (_, _) => Task.FromException<string>(
                 new OperationCanceledException("API canceled the upload."))
         };
-        var service = new ComicPublishingService(api);
+        var service = new ComicPublishingService(api, new FakeLocalImageReader());
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
             service.UploadImagesAsync([File("1.jpg")], CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ReaderUnauthorizedAccess_ProducesFailedImage()
+    {
+        var unauthorized = new UnauthorizedAccessException("Cannot read image.");
+        var source = File("1.jpg");
+        var api = new FakeComicPublishingApi();
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (_, _) => Task.FromException<byte[]>(unauthorized)
+        };
+        var service = new ComicPublishingService(api, reader);
+
+        var result = await service.UploadImagesAsync([source], CancellationToken.None);
+
+        Assert.AreEqual(0, result.Successes.Count);
+        Assert.AreEqual(1, result.Failures.Count);
+        Assert.AreEqual(source.Id, result.Failures[0].SourceId);
+        Assert.AreEqual(unauthorized.Message, result.Failures[0].Message);
+        Assert.AreEqual(0, api.UploadCallCount);
+    }
+
+    [TestMethod]
+    public async Task UploadImagesAsync_ReaderUnauthorizedAccessFailsOnlyThatImage()
+    {
+        var readable = File("1.jpg");
+        var unauthorized = File("2.jpg");
+        var api = new FakeComicPublishingApi();
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) => path == unauthorized.FilePath
+                ? Task.FromException<byte[]>(
+                    new UnauthorizedAccessException("Cannot read image."))
+                : Task.FromResult<byte[]>([1, 2, 3])
+        };
+        var service = new ComicPublishingService(api, reader);
+
+        var result = await service.UploadImagesAsync(
+            [unauthorized, readable],
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { readable.Id },
+            result.Successes.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { unauthorized.Id },
+            result.Failures.Select(item => item.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "1.jpg" },
+            api.UploadedFileNames.ToArray());
     }
 
     [TestMethod]
@@ -605,6 +755,7 @@ public sealed class ComicPublishingServiceTests
         var workersStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var startedCount = 0;
+        var startedReadPaths = new ConcurrentQueue<string>();
         var api = new FakeComicPublishingApi
         {
             UploadHandler = async (_, cancellationToken) =>
@@ -618,11 +769,20 @@ public sealed class ComicPublishingServiceTests
                 return "unreachable";
             }
         };
-        var service = new ComicPublishingService(api);
+        var reader = new FakeLocalImageReader
+        {
+            ReadHandler = (path, _) =>
+            {
+                startedReadPaths.Enqueue(path);
+                return Task.FromResult<byte[]>([1, 2, 3]);
+            }
+        };
+        var service = new ComicPublishingService(api, reader);
         using var cancellation = new CancellationTokenSource();
+        var files = new[] { File("1.jpg"), File("2.jpg"), File("3.jpg"), File("4.jpg") };
 
         var upload = service.UploadImagesAsync(
-            [File("1.jpg"), File("2.jpg"), File("3.jpg"), File("4.jpg")],
+            files,
             cancellation.Token);
         await workersStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         cancellation.Cancel();
@@ -630,6 +790,10 @@ public sealed class ComicPublishingServiceTests
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             upload.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.AreEqual(3, api.UploadCallCount);
+        CollectionAssert.AreEquivalent(
+            files.Take(3).Select(file => file.FilePath).ToArray(),
+            startedReadPaths.ToArray());
+        Assert.IsFalse(startedReadPaths.Contains(files[3].FilePath));
     }
 
     private static MyComicSummary Summary(long id, string type, string title) =>
@@ -671,8 +835,8 @@ public sealed class ComicPublishingServiceTests
     private static ComicChapterDraft ValidChapterDraft() =>
         new(70, "Chapter", ["image"]);
 
-    private static LocalImageFile File(string fileName) =>
-        new(fileName, [1, 2, 3]);
+    private static LocalImageSource File(string fileName) =>
+        new(Guid.NewGuid(), fileName, $"C:\\images\\{fileName}");
 
     private static void UpdateMaximum(ref int maximum, int current)
     {
@@ -685,6 +849,15 @@ public sealed class ComicPublishingServiceTests
                 return;
             }
         }
+    }
+
+    private sealed class FakeLocalImageReader : ILocalImageReader
+    {
+        public Func<string, CancellationToken, Task<byte[]>> ReadHandler { get; set; } =
+            (_, _) => Task.FromResult<byte[]>([1, 2, 3]);
+
+        public Task<byte[]> ReadAsync(string filePath, CancellationToken cancellationToken) =>
+            ReadHandler(filePath, cancellationToken);
     }
 
     private sealed class FakeComicPublishingApi : IComicPublishingApi

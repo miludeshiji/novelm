@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using NovelM_App.Domain.Common;
 using NovelM_App.Domain.Publishing;
 using Windows.System;
 
@@ -16,7 +17,10 @@ public sealed partial class PublishingPage : Page
 {
     private static readonly string[] ImageFileTypes =
         [".png", ".jpg", ".jpeg", ".webp"];
+    private static readonly HashSet<string> ImageFileTypeSet =
+        new(ImageFileTypes, StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<Image, PendingComicImage> _pendingImageBindings = [];
     private CancellationTokenSource? _pageCancellation;
     private bool _hasLoadedInitialData;
     private bool _isInitialLoadInProgress;
@@ -94,6 +98,10 @@ public sealed partial class PublishingPage : Page
         _isLoaded = false;
         _isInitialLoadInProgress = false;
         Unsubscribe();
+        foreach (var image in _pendingImageBindings.Keys.ToArray())
+        {
+            UnbindPendingImage(image);
+        }
 
         var cancellation = _pageCancellation;
         _pageCancellation = null;
@@ -113,6 +121,8 @@ public sealed partial class PublishingPage : Page
         Editor.PropertyChanged += Editor_PropertyChanged;
         Editor.Tags.CollectionChanged += Tags_CollectionChanged;
         Editor.ChapterImages.CollectionChanged += ChapterImages_CollectionChanged;
+        Editor.PendingChapterImages.CollectionChanged += UploadQueues_CollectionChanged;
+        Editor.PendingBatchChapters.CollectionChanged += UploadQueues_CollectionChanged;
         _isSubscribed = true;
     }
 
@@ -128,6 +138,8 @@ public sealed partial class PublishingPage : Page
         Editor.PropertyChanged -= Editor_PropertyChanged;
         Editor.Tags.CollectionChanged -= Tags_CollectionChanged;
         Editor.ChapterImages.CollectionChanged -= ChapterImages_CollectionChanged;
+        Editor.PendingChapterImages.CollectionChanged -= UploadQueues_CollectionChanged;
+        Editor.PendingBatchChapters.CollectionChanged -= UploadQueues_CollectionChanged;
         _isSubscribed = false;
     }
 
@@ -197,6 +209,13 @@ public sealed partial class PublishingPage : Page
         RunOnUiThread(UpdateViewState);
     }
 
+    private void UploadQueues_CollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs args)
+    {
+        RunOnUiThread(UpdateViewState);
+    }
+
     private async void SearchButton_Click(object sender, RoutedEventArgs args)
     {
         await ExecuteAsync(ViewModel.SearchAsync);
@@ -230,8 +249,13 @@ public sealed partial class PublishingPage : Page
         await ExecuteAsync(ViewModel.NextPageAsync);
     }
 
-    private void AccountButton_Click(object sender, RoutedEventArgs args)
+    private async void AccountButton_Click(object sender, RoutedEventArgs args)
     {
+        if (!await ConfirmNavigationAwayAsync())
+        {
+            return;
+        }
+
         ViewModel.RequestAccountNavigation();
     }
 
@@ -369,7 +393,6 @@ public sealed partial class PublishingPage : Page
             }
 
             var path = file.Path;
-            var bytes = await File.ReadAllBytesAsync(path, cancellation.Value);
             if (!ReferenceEquals(_pageCancellation, pageCancellation)
                 || Editor.BookId != bookId)
             {
@@ -377,7 +400,7 @@ public sealed partial class PublishingPage : Page
             }
 
             await Editor.UploadCoverAsync(
-                new LocalImageFile(Path.GetFileName(path), bytes),
+                new LocalImageSource(Guid.NewGuid(), Path.GetFileName(path), path),
                 cancellation.Value);
         }
         catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
@@ -612,13 +635,12 @@ public sealed partial class PublishingPage : Page
                 return;
             }
 
-            var localFiles = new List<LocalImageFile>(files.Count);
-            foreach (var file in files)
-            {
-                var path = file.Path;
-                var bytes = await File.ReadAllBytesAsync(path, cancellation.Value);
-                localFiles.Add(new LocalImageFile(Path.GetFileName(path), bytes));
-            }
+            var localFiles = files
+                .Select(file => new LocalImageSource(
+                    Guid.NewGuid(),
+                    Path.GetFileName(file.Path),
+                    file.Path))
+                .ToArray();
 
             if (!ReferenceEquals(_pageCancellation, pageCancellation)
                 || Editor.BookId != bookId
@@ -628,19 +650,184 @@ public sealed partial class PublishingPage : Page
                 return;
             }
 
-            await Editor.UploadChapterImagesAsync(localFiles, cancellation.Value);
+            Editor.StageChapterImages(localFiles);
         }
         catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
         {
         }
         catch
         {
-            SetLocalError("读取或上传本地章节图片失败，请重试。");
+            SetLocalError("选择本地章节图片失败，请重试。");
         }
         finally
         {
             _isFileOperationInProgress = false;
             UpdateViewState();
+        }
+    }
+
+    private async void UploadChapterImagesButton_Click(
+        object sender,
+        RoutedEventArgs args) =>
+        await ExecuteAsync(Editor.UploadPendingChapterImagesAsync);
+
+    private void ClearPendingChapterImagesButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        Editor.ClearPendingChapterImages();
+        UpdateViewState();
+    }
+
+    private void RemovePendingChapterImageButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: PendingComicImage image })
+        {
+            Editor.RemovePendingChapterImage(image.Id);
+            UpdateViewState();
+        }
+    }
+
+    private async void ReplacePendingChapterImageButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: PendingComicImage image })
+        {
+            return;
+        }
+
+        var replacement = await PickReplacementImageAsync();
+        if (replacement is null)
+        {
+            return;
+        }
+
+        await ExecuteAsync(token => Editor.ReplaceFailedChapterImageAsync(
+            image.Id,
+            replacement.Value.FileName,
+            replacement.Value.FilePath,
+            token));
+    }
+
+    private async void SelectBatchChapterFoldersButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        var pageCancellation = _pageCancellation;
+        var cancellation = CurrentCancellation();
+        var bookId = Editor.BookId;
+        if (cancellation is null || bookId is null)
+        {
+            return;
+        }
+
+        ClearLocalError();
+        _isFileOperationInProgress = true;
+        UpdateViewState();
+        try
+        {
+            var folders = await CreateChapterFolderPicker().PickMultipleFoldersAsync();
+            if (folders is null || folders.Count == 0)
+            {
+                return;
+            }
+
+            var folderPaths = folders
+                .Select(folder => folder.Path)
+                .ToArray();
+            var selections = await Task.Run(
+                () => folderPaths.Select(path =>
+                {
+                    cancellation.Value.ThrowIfCancellationRequested();
+                    return ScanChapterFolder(path, cancellation.Value);
+                }).ToArray(),
+                cancellation.Value);
+            if (ReferenceEquals(_pageCancellation, pageCancellation)
+                && Editor.BookId == bookId)
+            {
+                Editor.StageBatchChapters(selections);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            SetLocalError("读取章节文件夹失败，请重试。");
+        }
+        finally
+        {
+            _isFileOperationInProgress = false;
+            UpdateViewState();
+        }
+    }
+
+    private async void UploadBatchChaptersButton_Click(
+        object sender,
+        RoutedEventArgs args) =>
+        await ExecuteAsync(Editor.UploadBatchChaptersAsync);
+
+    private async void RemoveBatchChapterButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: PendingComicChapter chapter })
+        {
+            await ExecuteAsync(token => Editor.RemoveBatchChapterAsync(
+                chapter.Id,
+                token));
+        }
+    }
+
+    private async void RemoveBatchImageButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: PendingComicImage image })
+        {
+            await ExecuteAsync(token => Editor.RemoveBatchImageAsync(
+                image.Id,
+                token));
+        }
+    }
+
+    private async void ReplaceBatchImageButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: PendingComicImage image })
+        {
+            return;
+        }
+
+        var replacement = await PickReplacementImageAsync();
+        if (replacement is null)
+        {
+            return;
+        }
+
+        await ExecuteAsync(token => Editor.ReplaceFailedBatchImageAsync(
+            image.Id,
+            replacement.Value.FileName,
+            replacement.Value.FilePath,
+            token));
+    }
+
+    private async void RetryBatchChapterButton_Click(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement
+            {
+                DataContext: PendingComicChapter { CanRetryCreate: true } chapter
+            })
+        {
+            await ExecuteAsync(token => Editor.RetryBatchChapterCreationAsync(
+                chapter.Id,
+                token));
         }
     }
 
@@ -1134,10 +1321,22 @@ public sealed partial class PublishingPage : Page
         SelectChapterImagesButton.IsEnabled = Editor.IsLoaded
             && (Editor.IsCreatingChapter || Editor.SelectedChapter is not null)
             && !isBusy;
+        UploadChapterImagesButton.IsEnabled = Editor.CanUploadPendingChapterImages
+            && !isBusy;
+        ClearPendingChapterImagesButton.IsEnabled = Editor.HasPendingChapterImages
+            && Editor.PendingChapterImages.All(item => item.CanRemove)
+            && !isBusy;
+        PendingChapterImagesPanel.Visibility = Editor.HasPendingChapterImages
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        PendingChapterImagesGridView.IsEnabled = !isBusy;
         ClearChapterImagesButton.IsEnabled = Editor.ChapterImages.Count > 0 && !isBusy;
         ChapterImagesGridView.CanReorderItems = !isBusy;
-        SaveChapterButton.IsEnabled = (Editor.IsCreatingChapter
-            || Editor.SelectedChapter is not null) && !isBusy;
+        SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;
+        SelectBatchChapterFoldersButton.IsEnabled = Editor.IsLoaded && !isBusy;
+        UploadBatchChaptersButton.IsEnabled = Editor.CanUploadBatchChapters && !isBusy;
+        PendingBatchChaptersList.IsEnabled = !isBusy;
+        BatchUploadProgressText.Text = Editor.BatchProgressText;
 
         var chapterIndex = Editor.SelectedChapter is null
             ? -1
@@ -1236,6 +1435,46 @@ public sealed partial class PublishingPage : Page
         return picker;
     }
 
+    private Microsoft.Windows.Storage.Pickers.FolderPicker CreateChapterFolderPicker() =>
+        new(App.MainWindow.AppWindow.Id)
+        {
+            Title = "选择章节文件夹",
+            CommitButtonText = "选择文件夹"
+        };
+
+    private async Task<(string FileName, string FilePath)?> PickReplacementImageAsync()
+    {
+        var cancellation = CurrentCancellation();
+        if (cancellation is null)
+        {
+            return null;
+        }
+
+        _isFileOperationInProgress = true;
+        UpdateViewState();
+        try
+        {
+            var file = await CreateImagePicker("选择替代图片").PickSingleFileAsync();
+            return file is null
+                ? null
+                : (Path.GetFileName(file.Path), file.Path);
+        }
+        catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch
+        {
+            SetLocalError("选择替代图片失败，请重试。");
+            return null;
+        }
+        finally
+        {
+            _isFileOperationInProgress = false;
+            UpdateViewState();
+        }
+    }
+
     private void ClearLocalError()
     {
         _localErrorMessage = null;
@@ -1284,6 +1523,146 @@ public sealed partial class PublishingPage : Page
         image.Source = CreateHttpImage(url);
     }
 
+    private void PendingImage_Loaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is Image image)
+        {
+            BindPendingImage(image, image.DataContext);
+        }
+    }
+
+    private void PendingImage_DataContextChanged(
+        FrameworkElement sender,
+        DataContextChangedEventArgs args)
+    {
+        if (sender is Image image)
+        {
+            BindPendingImage(image, args.NewValue);
+        }
+    }
+
+    private void PendingImage_Unloaded(object sender, RoutedEventArgs args)
+    {
+        if (sender is Image image)
+        {
+            UnbindPendingImage(image);
+            image.Source = null;
+        }
+    }
+
+    private void BindPendingImage(Image image, object? dataContext)
+    {
+        UnbindPendingImage(image);
+        image.Source = null;
+        if (!_isLoaded
+            || !image.IsLoaded
+            || dataContext is not PendingComicImage item)
+        {
+            return;
+        }
+
+        _pendingImageBindings[image] = item;
+        item.PropertyChanged += PendingImage_PropertyChanged;
+        _ = UpdatePendingImageAsync(image, item);
+    }
+
+    private void UnbindPendingImage(Image image)
+    {
+        if (_pendingImageBindings.Remove(image, out var item))
+        {
+            item.PropertyChanged -= PendingImage_PropertyChanged;
+        }
+    }
+
+    private void PendingImage_PropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (sender is not PendingComicImage item
+            || (!string.IsNullOrEmpty(args.PropertyName)
+                && args.PropertyName != nameof(PendingComicImage.FilePath)))
+        {
+            return;
+        }
+
+        RunOnUiThread(() =>
+        {
+            foreach (var (image, boundItem) in _pendingImageBindings.ToArray())
+            {
+                if (ReferenceEquals(boundItem, item))
+                {
+                    _ = UpdatePendingImageAsync(image, item);
+                }
+            }
+        });
+    }
+
+    private async Task UpdatePendingImageAsync(
+        Image image,
+        object? dataContext)
+    {
+        image.Source = null;
+        if (dataContext is not PendingComicImage item)
+        {
+            return;
+        }
+
+        var filePath = item.FilePath;
+        AutomationProperties.SetName(image, item.FileName);
+        try
+        {
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(filePath);
+            using var stream = await file.OpenReadAsync();
+            var bitmap = new BitmapImage();
+            await bitmap.SetSourceAsync(stream);
+            if (IsCurrentPendingImagePreview(image, item, filePath))
+            {
+                image.Source = bitmap;
+            }
+        }
+        catch
+        {
+            if (IsCurrentPendingImagePreview(image, item, filePath))
+            {
+                image.Source = null;
+            }
+        }
+    }
+
+    private bool IsCurrentPendingImagePreview(
+        Image image,
+        PendingComicImage item,
+        string filePath)
+    {
+        var bindingMatches = _pendingImageBindings.TryGetValue(
+            image,
+            out var boundItem)
+            && ReferenceEquals(boundItem, item);
+        return IsPendingImagePreviewCurrent(
+            _isLoaded,
+            image.IsLoaded,
+            bindingMatches,
+            ReferenceEquals(image.DataContext, item),
+            item.FilePath,
+            filePath);
+    }
+
+    internal static bool IsPendingImagePreviewCurrent(
+        bool isPageLoaded,
+        bool isImageLoaded,
+        bool bindingMatches,
+        bool dataContextMatches,
+        string currentFilePath,
+        string capturedFilePath) =>
+        isPageLoaded
+        && isImageLoaded
+        && bindingMatches
+        && dataContextMatches
+        && string.Equals(
+            currentFilePath,
+            capturedFilePath,
+            StringComparison.OrdinalIgnoreCase);
+
     private static BitmapImage? CreateHttpImage(string? source)
     {
         if (!Uri.TryCreate(source, UriKind.Absolute, out var uri)
@@ -1309,6 +1688,76 @@ public sealed partial class PublishingPage : Page
         }
 
         return Convert.ToInt64(Math.Round(value));
+    }
+
+    internal static LocalComicChapterSelection ScanChapterFolder(
+        string folderPath,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var title = GetChapterFolderTitle(folderPath);
+        try
+        {
+            var imagePaths = new List<string>();
+            foreach (var path in Directory.EnumerateFiles(
+                         folderPath,
+                         "*",
+                         SearchOption.TopDirectoryOnly))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ImageFileTypeSet.Contains(Path.GetExtension(path)))
+                {
+                    imagePaths.Add(path);
+                }
+            }
+
+            var images = imagePaths
+                .OrderBy(
+                    path => Path.GetFileName(path),
+                    NaturalNameComparer.Instance)
+                .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+                .Select(path =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new LocalImageSource(
+                        Guid.NewGuid(),
+                        Path.GetFileName(path),
+                        path);
+                })
+                .ToArray();
+            return new LocalComicChapterSelection(
+                folderPath,
+                title,
+                images,
+                images.Length == 0 ? "没有支持的图片。" : null);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return new LocalComicChapterSelection(
+                folderPath,
+                title,
+                [],
+                exception.Message);
+        }
+    }
+
+    internal static string GetChapterFolderTitle(string folderPath)
+    {
+        var trimmed = folderPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+        if (trimmed.Length == 0)
+        {
+            return folderPath;
+        }
+
+        var separatorIndex = trimmed.LastIndexOfAny(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+        return separatorIndex >= 0 && separatorIndex < trimmed.Length - 1
+            ? trimmed[(separatorIndex + 1)..]
+            : trimmed;
     }
 
     private static T? FindAncestor<T>(DependencyObject element)

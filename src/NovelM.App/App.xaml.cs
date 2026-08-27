@@ -97,6 +97,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IBookApi, SignalRBookApi>();
         services.AddSingleton<IMangaApi, SignalRMangaApi>();
         services.AddSingleton<IComicPublishingApi, SignalRComicPublishingApi>();
+        services.AddSingleton<ILocalImageReader, LocalImageReader>();
         services.AddSingleton<IAuthService, AuthService>();
         services.AddSingleton<IBookService, BookService>();
         services.AddSingleton<IMangaService, MangaService>();
