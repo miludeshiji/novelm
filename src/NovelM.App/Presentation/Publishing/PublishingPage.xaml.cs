@@ -121,6 +121,8 @@ public sealed partial class PublishingPage : Page
         Editor.PropertyChanged += Editor_PropertyChanged;
         Editor.Tags.CollectionChanged += Tags_CollectionChanged;
         Editor.ChapterImages.CollectionChanged += ChapterImages_CollectionChanged;
+        Editor.PendingChapterImages.CollectionChanged += UploadQueues_CollectionChanged;
+        Editor.PendingBatchChapters.CollectionChanged += UploadQueues_CollectionChanged;
         _isSubscribed = true;
     }
 
@@ -136,6 +138,8 @@ public sealed partial class PublishingPage : Page
         Editor.PropertyChanged -= Editor_PropertyChanged;
         Editor.Tags.CollectionChanged -= Tags_CollectionChanged;
         Editor.ChapterImages.CollectionChanged -= ChapterImages_CollectionChanged;
+        Editor.PendingChapterImages.CollectionChanged -= UploadQueues_CollectionChanged;
+        Editor.PendingBatchChapters.CollectionChanged -= UploadQueues_CollectionChanged;
         _isSubscribed = false;
     }
 
@@ -199,6 +203,13 @@ public sealed partial class PublishingPage : Page
     }
 
     private void ChapterImages_CollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs args)
+    {
+        RunOnUiThread(UpdateViewState);
+    }
+
+    private void UploadQueues_CollectionChanged(
         object? sender,
         NotifyCollectionChangedEventArgs args)
     {
@@ -1305,9 +1316,22 @@ public sealed partial class PublishingPage : Page
         SelectChapterImagesButton.IsEnabled = Editor.IsLoaded
             && (Editor.IsCreatingChapter || Editor.SelectedChapter is not null)
             && !isBusy;
+        UploadChapterImagesButton.IsEnabled = Editor.CanUploadPendingChapterImages
+            && !isBusy;
+        ClearPendingChapterImagesButton.IsEnabled = Editor.HasPendingChapterImages
+            && Editor.PendingChapterImages.All(item => item.CanRemove)
+            && !isBusy;
+        PendingChapterImagesPanel.Visibility = Editor.HasPendingChapterImages
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        PendingChapterImagesGridView.IsEnabled = !isBusy;
         ClearChapterImagesButton.IsEnabled = Editor.ChapterImages.Count > 0 && !isBusy;
         ChapterImagesGridView.CanReorderItems = !isBusy;
         SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;
+        SelectBatchChapterFoldersButton.IsEnabled = Editor.IsLoaded && !isBusy;
+        UploadBatchChaptersButton.IsEnabled = Editor.CanUploadBatchChapters && !isBusy;
+        PendingBatchChaptersList.IsEnabled = !isBusy;
+        BatchUploadProgressText.Text = Editor.BatchProgressText;
 
         var chapterIndex = Editor.SelectedChapter is null
             ? -1

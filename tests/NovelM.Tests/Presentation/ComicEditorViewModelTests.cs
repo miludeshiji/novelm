@@ -1875,6 +1875,68 @@ public sealed class ComicEditorViewModelTests
     }
 
     [TestMethod]
+    public void BatchProgressText_EmptyQueueShowsZeroTotals()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+
+        Assert.AreEqual("图片 0/0，章节 0/0", viewModel.BatchProgressText);
+    }
+
+    [TestMethod]
+    public async Task BatchProgressText_CountsOnlyTerminalImagesAndCompletedChapters()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        viewModel.StageBatchChapters(
+        [
+            Folder("第1章", Source("1.jpg"), Source("2.jpg")),
+            Folder("第2章", Source("3.jpg"), Source("4.jpg"))
+        ]);
+        var first = viewModel.PendingBatchChapters[0];
+        var second = viewModel.PendingBatchChapters[1];
+
+        first.Images[0].BeginUpload();
+        first.Images[1].Complete("https://i/2.jpg");
+        second.Images[0].Fail("failed");
+        first.State = ComicChapterUploadState.Completed;
+
+        Assert.AreEqual("图片 2/4，章节 1/2", viewModel.BatchProgressText);
+    }
+
+    [TestMethod]
+    public async Task BatchProgressText_ImageChapterAndCollectionChangesNotify()
+    {
+        var viewModel = CreateViewModel(LoadedService());
+        await viewModel.LoadAsync(42, Profile(), CancellationToken.None);
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.StageBatchChapters([Folder("第1章", Source("1.jpg"))]);
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.BatchProgressText));
+
+        changedProperties.Clear();
+        var chapter = viewModel.PendingBatchChapters.Single();
+        chapter.Images.Single().BeginUpload();
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.BatchProgressText));
+
+        changedProperties.Clear();
+        chapter.State = ComicChapterUploadState.Completed;
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.BatchProgressText));
+
+        changedProperties.Clear();
+        chapter.Images.Clear();
+        CollectionAssert.Contains(
+            changedProperties,
+            nameof(ComicEditorViewModel.BatchProgressText));
+    }
+
+    [TestMethod]
     public async Task UploadCoverAsync_SuccessUpdatesCoverAndMarksInfoDirty()
     {
         var source = Source("cover.jpg");

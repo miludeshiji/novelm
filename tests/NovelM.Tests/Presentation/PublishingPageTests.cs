@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using NovelM_App.Presentation.Publishing;
 
 namespace NovelM.Tests.Presentation;
@@ -46,6 +47,157 @@ public sealed class PublishingPageTests
 
         StringAssert.Contains(
             pageSource,
+            "SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;");
+    }
+
+    [TestMethod]
+    public void ChapterUploadUi_DeclaresRequiredNamedControls()
+    {
+        var xaml = ReadXamlSource();
+
+        foreach (var name in new[]
+                 {
+                     "PendingChapterImagesGridView",
+                     "UploadChapterImagesButton",
+                     "SelectBatchChapterFoldersButton",
+                     "PendingBatchChaptersList",
+                     "UploadBatchChaptersButton"
+                 })
+        {
+            StringAssert.Contains(xaml, $"x:Name=\"{name}\"");
+        }
+    }
+
+    [TestMethod]
+    public void ChapterUploadUi_WiresCommandsOnTheirNamedControls()
+    {
+        var xaml = ReadXamlSource();
+        var expectedHandlers = new Dictionary<string, string>
+        {
+            ["SelectChapterImagesButton"] = "SelectChapterImagesButton_Click",
+            ["UploadChapterImagesButton"] = "UploadChapterImagesButton_Click",
+            ["ClearPendingChapterImagesButton"] = "ClearPendingChapterImagesButton_Click",
+            ["ReplacePendingChapterImageButton"] = "ReplacePendingChapterImageButton_Click",
+            ["RemovePendingChapterImageButton"] = "RemovePendingChapterImageButton_Click",
+            ["SelectBatchChapterFoldersButton"] = "SelectBatchChapterFoldersButton_Click",
+            ["UploadBatchChaptersButton"] = "UploadBatchChaptersButton_Click",
+            ["RetryBatchChapterButton"] = "RetryBatchChapterButton_Click",
+            ["RemoveBatchChapterButton"] = "RemoveBatchChapterButton_Click",
+            ["ReplaceBatchImageButton"] = "ReplaceBatchImageButton_Click",
+            ["RemoveBatchImageButton"] = "RemoveBatchImageButton_Click"
+        };
+
+        foreach (var (controlName, handler) in expectedHandlers)
+        {
+            var control = ExtractNamedXamlStartTag(xaml, controlName);
+            StringAssert.Contains(control, $"Click=\"{handler}\"");
+        }
+
+        StringAssert.Contains(
+            ExtractNamedXamlStartTag(xaml, "ReplacePendingChapterImageButton"),
+            "Content=\"重新选择并上传\"");
+        StringAssert.Contains(
+            ExtractNamedXamlStartTag(xaml, "ReplaceBatchImageButton"),
+            "Content=\"重新选择并上传\"");
+    }
+
+    [TestMethod]
+    public void PendingImageTemplates_WireSymmetricPreviewLifecycleEvents()
+    {
+        var pendingImages = Regex.Matches(
+                ReadXamlSource(),
+                "<Image\\b[^>]*Loaded=\\\"PendingImage_Loaded\\\"[^>]*/>",
+                RegexOptions.Singleline)
+            .Select(match => match.Value)
+            .ToArray();
+
+        Assert.AreEqual(2, pendingImages.Length);
+        foreach (var image in pendingImages)
+        {
+            StringAssert.Contains(
+                image,
+                "DataContextChanged=\"PendingImage_DataContextChanged\"");
+            StringAssert.Contains(image, "Unloaded=\"PendingImage_Unloaded\"");
+        }
+    }
+
+    [TestMethod]
+    public void ChapterUploadUi_BindsQueuesAndDynamicItemState()
+    {
+        var xaml = ReadXamlSource();
+
+        StringAssert.Contains(
+            xaml,
+            "xmlns:viewModels=\"using:NovelM_App.Presentation.Publishing\"");
+        StringAssert.Contains(
+            ExtractNamedXamlStartTag(xaml, "PendingChapterImagesGridView"),
+            "ItemsSource=\"{x:Bind ViewModel.Editor.PendingChapterImages, Mode=OneWay}\"");
+        StringAssert.Contains(
+            ExtractNamedXamlStartTag(xaml, "PendingBatchChaptersList"),
+            "ItemsSource=\"{x:Bind ViewModel.Editor.PendingBatchChapters, Mode=OneWay}\"");
+        foreach (var binding in new[]
+                 {
+                     "Text=\"{x:Bind FileName, Mode=OneWay}\"",
+                     "Text=\"{x:Bind StatusText, Mode=OneWay}\"",
+                     "Text=\"{x:Bind ErrorMessage, Mode=OneWay}\"",
+                     "IsEnabled=\"{x:Bind CanReplace, Mode=OneWay}\"",
+                     "IsEnabled=\"{x:Bind CanRemove, Mode=OneWay}\"",
+                     "IsEnabled=\"{x:Bind CanRetryCreate, Mode=OneWay}\""
+                 })
+        {
+            StringAssert.Contains(xaml, binding);
+        }
+    }
+
+    [TestMethod]
+    public void ChapterUploadUi_UpdateViewStateAndSubscriptionsFollowQueues()
+    {
+        var pageSource = ReadPageSource();
+        var subscribe = ExtractSourceRange(
+            pageSource,
+            "private void Subscribe()",
+            "private void Unsubscribe()");
+        var unsubscribe = ExtractSourceRange(
+            pageSource,
+            "private void Unsubscribe()",
+            "private void ViewModel_AccountNavigationRequested(");
+        var updateViewState = ExtractSourceRange(
+            pageSource,
+            "private void UpdateViewState()",
+            "private string? CurrentNoticeMessage()");
+
+        StringAssert.Contains(
+            subscribe,
+            "Editor.PendingChapterImages.CollectionChanged += UploadQueues_CollectionChanged;");
+        StringAssert.Contains(
+            subscribe,
+            "Editor.PendingBatchChapters.CollectionChanged += UploadQueues_CollectionChanged;");
+        StringAssert.Contains(
+            unsubscribe,
+            "Editor.PendingChapterImages.CollectionChanged -= UploadQueues_CollectionChanged;");
+        StringAssert.Contains(
+            unsubscribe,
+            "Editor.PendingBatchChapters.CollectionChanged -= UploadQueues_CollectionChanged;");
+        StringAssert.Contains(
+            updateViewState,
+            "PendingChapterImagesPanel.Visibility = Editor.HasPendingChapterImages");
+        StringAssert.Contains(
+            updateViewState,
+            "UploadChapterImagesButton.IsEnabled = Editor.CanUploadPendingChapterImages");
+        StringAssert.Contains(
+            updateViewState,
+            "ClearPendingChapterImagesButton.IsEnabled = Editor.HasPendingChapterImages");
+        StringAssert.Contains(
+            updateViewState,
+            "SelectBatchChapterFoldersButton.IsEnabled = Editor.IsLoaded && !isBusy;");
+        StringAssert.Contains(
+            updateViewState,
+            "UploadBatchChaptersButton.IsEnabled = Editor.CanUploadBatchChapters && !isBusy;");
+        StringAssert.Contains(
+            updateViewState,
+            "BatchUploadProgressText.Text = Editor.BatchProgressText;");
+        StringAssert.Contains(
+            updateViewState,
             "SaveChapterButton.IsEnabled = Editor.CanSaveChapter && !isBusy;");
     }
 
@@ -421,6 +573,32 @@ public sealed class PublishingPageTests
             "Publishing",
             "PublishingPage.xaml.cs"));
         return File.ReadAllText(pagePath);
+    }
+
+    private static string ReadXamlSource()
+    {
+        var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
+        var xamlPath = Path.GetFullPath(Path.Combine(
+            testDirectory,
+            "..",
+            "..",
+            "..",
+            "src",
+            "NovelM.App",
+            "Presentation",
+            "Publishing",
+            "PublishingPage.xaml"));
+        return File.ReadAllText(xamlPath);
+    }
+
+    private static string ExtractNamedXamlStartTag(string xaml, string name)
+    {
+        var match = Regex.Match(
+            xaml,
+            $"<[^>]+\\bx:Name=\\\"{Regex.Escape(name)}\\\"[^>]*>",
+            RegexOptions.Singleline);
+        Assert.IsTrue(match.Success, $"Missing named XAML control: {name}");
+        return match.Value;
     }
 
     private static string ExtractSourceRange(

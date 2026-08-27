@@ -22,6 +22,22 @@ public sealed partial class ComicEditorViewModel
         PendingBatchChapters.Any(
             chapter => chapter.State != ComicChapterUploadState.Completed);
 
+    public string BatchProgressText
+    {
+        get
+        {
+            var images = PendingBatchChapters
+                .SelectMany(chapter => chapter.Images)
+                .ToArray();
+            var finishedImages = images.Count(image =>
+                image.State is ComicImageUploadState.Uploaded
+                    or ComicImageUploadState.Failed);
+            var finishedChapters = PendingBatchChapters.Count(chapter =>
+                chapter.State == ComicChapterUploadState.Completed);
+            return $"图片 {finishedImages}/{images.Length}，章节 {finishedChapters}/{PendingBatchChapters.Count}";
+        }
+    }
+
     public bool CanUploadPendingChapterImages =>
         HasPendingChapterImages
         && PendingChapterImages.Any(
@@ -432,6 +448,7 @@ public sealed partial class ComicEditorViewModel
         UpdatePendingBatchChapterSubscriptions(args);
         OnPropertyChanged(nameof(HasPendingBatchChapters));
         OnPropertyChanged(nameof(CanUploadBatchChapters));
+        OnPropertyChanged(nameof(BatchProgressText));
         OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 
@@ -495,6 +512,7 @@ public sealed partial class ComicEditorViewModel
         {
             OnPropertyChanged(nameof(HasPendingBatchChapters));
             OnPropertyChanged(nameof(CanUploadBatchChapters));
+            OnPropertyChanged(nameof(BatchProgressText));
             OnPropertyChanged(nameof(HasUnsavedChanges));
             return;
         }
@@ -504,6 +522,7 @@ public sealed partial class ComicEditorViewModel
             or nameof(PendingComicChapter.AllImagesUploaded))
         {
             OnPropertyChanged(nameof(CanUploadBatchChapters));
+            OnPropertyChanged(nameof(BatchProgressText));
         }
     }
 
