@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using NovelM_App.Presentation.Publishing;
 
 namespace NovelM.Tests.Presentation;
@@ -8,6 +8,9 @@ namespace NovelM.Tests.Presentation;
 [TestClass]
 public sealed class PublishingPageTests
 {
+    private static readonly XNamespace XamlNamespace =
+        "http://schemas.microsoft.com/winfx/2006/xaml";
+
     [TestMethod]
     public void ToNullableInt64_UnsetOrInvalidValue_ReturnsNull()
     {
@@ -53,100 +56,110 @@ public sealed class PublishingPageTests
     [TestMethod]
     public void ChapterUploadUi_DeclaresRequiredNamedControls()
     {
-        var xaml = ReadXamlSource();
+        var document = ReadXamlDocument();
+        Assert.AreEqual(
+            "using:NovelM_App.Presentation.Publishing",
+            document.Root!.GetNamespaceOfPrefix("viewModels")?.NamespaceName);
 
-        foreach (var name in new[]
+        foreach (var (name, elementType, clickHandler) in new[]
                  {
-                     "PendingChapterImagesGridView",
-                     "UploadChapterImagesButton",
-                     "SelectBatchChapterFoldersButton",
-                     "PendingBatchChaptersList",
-                     "UploadBatchChaptersButton"
+                     ("PendingChapterImagesGridView", "GridView", (string?)null),
+                     ("UploadChapterImagesButton", "Button", "UploadChapterImagesButton_Click"),
+                     ("SelectBatchChapterFoldersButton", "Button", "SelectBatchChapterFoldersButton_Click"),
+                     ("PendingBatchChaptersList", "ListView", null),
+                     ("UploadBatchChaptersButton", "Button", "UploadBatchChaptersButton_Click"),
+                     ("SelectChapterImagesButton", "Button", "SelectChapterImagesButton_Click"),
+                     ("ClearPendingChapterImagesButton", "Button", "ClearPendingChapterImagesButton_Click"),
+                     ("ClearChapterImagesButton", "Button", "ClearChapterImagesButton_Click")
                  })
         {
-            StringAssert.Contains(xaml, $"x:Name=\"{name}\"");
+            var element = FindNamedElement(document, name);
+            Assert.AreEqual(
+                elementType,
+                element.Name.LocalName);
+            if (clickHandler is not null)
+            {
+                AssertAttribute(element, "Click", clickHandler);
+            }
         }
     }
 
     [TestMethod]
-    public void ChapterUploadUi_WiresCommandsOnTheirNamedControls()
+    public void PendingChapterImagesGridView_BindsPreviewStateAndItemCommandsWithinItsTemplate()
     {
-        var xaml = ReadXamlSource();
-        var expectedHandlers = new Dictionary<string, string>
-        {
-            ["SelectChapterImagesButton"] = "SelectChapterImagesButton_Click",
-            ["UploadChapterImagesButton"] = "UploadChapterImagesButton_Click",
-            ["ClearPendingChapterImagesButton"] = "ClearPendingChapterImagesButton_Click",
-            ["ReplacePendingChapterImageButton"] = "ReplacePendingChapterImageButton_Click",
-            ["RemovePendingChapterImageButton"] = "RemovePendingChapterImageButton_Click",
-            ["SelectBatchChapterFoldersButton"] = "SelectBatchChapterFoldersButton_Click",
-            ["UploadBatchChaptersButton"] = "UploadBatchChaptersButton_Click",
-            ["RetryBatchChapterButton"] = "RetryBatchChapterButton_Click",
-            ["RemoveBatchChapterButton"] = "RemoveBatchChapterButton_Click",
-            ["ReplaceBatchImageButton"] = "ReplaceBatchImageButton_Click",
-            ["RemoveBatchImageButton"] = "RemoveBatchImageButton_Click"
-        };
+        var gridView = FindNamedElement(
+            ReadXamlDocument(),
+            "PendingChapterImagesGridView");
+        AssertAttribute(
+            gridView,
+            "ItemsSource",
+            "{x:Bind ViewModel.Editor.PendingChapterImages, Mode=OneWay}");
+        var imageTemplate = FindTypedDataTemplate(
+            gridView,
+            "viewModels:PendingComicImage");
 
-        foreach (var (controlName, handler) in expectedHandlers)
-        {
-            var control = ExtractNamedXamlStartTag(xaml, controlName);
-            StringAssert.Contains(control, $"Click=\"{handler}\"");
-        }
-
-        StringAssert.Contains(
-            ExtractNamedXamlStartTag(xaml, "ReplacePendingChapterImageButton"),
-            "Content=\"重新选择并上传\"");
-        StringAssert.Contains(
-            ExtractNamedXamlStartTag(xaml, "ReplaceBatchImageButton"),
-            "Content=\"重新选择并上传\"");
+        AssertPendingImagePreview(imageTemplate);
+        AssertTemplateTextBinding(imageTemplate, "FileName");
+        AssertTemplateTextBinding(imageTemplate, "StatusText");
+        AssertTemplateTextBinding(imageTemplate, "ErrorMessage");
+        var replaceButton = AssertTemplateButton(
+            imageTemplate,
+            "ReplacePendingChapterImageButton",
+            "ReplacePendingChapterImageButton_Click",
+            "CanReplace");
+        AssertAttribute(replaceButton, "Content", "重新选择并上传");
+        AssertTemplateButton(
+            imageTemplate,
+            "RemovePendingChapterImageButton",
+            "RemovePendingChapterImageButton_Click",
+            "CanRemove");
     }
 
     [TestMethod]
-    public void PendingImageTemplates_WireSymmetricPreviewLifecycleEvents()
+    public void PendingBatchChaptersList_BindsChapterAndNestedImageContractsWithinTheirTemplates()
     {
-        var pendingImages = Regex.Matches(
-                ReadXamlSource(),
-                "<Image\\b[^>]*Loaded=\\\"PendingImage_Loaded\\\"[^>]*/>",
-                RegexOptions.Singleline)
-            .Select(match => match.Value)
-            .ToArray();
+        var listView = FindNamedElement(
+            ReadXamlDocument(),
+            "PendingBatchChaptersList");
+        AssertAttribute(
+            listView,
+            "ItemsSource",
+            "{x:Bind ViewModel.Editor.PendingBatchChapters, Mode=OneWay}");
+        var chapterTemplate = FindTypedDataTemplate(
+            listView,
+            "viewModels:PendingComicChapter");
 
-        Assert.AreEqual(2, pendingImages.Length);
-        foreach (var image in pendingImages)
-        {
-            StringAssert.Contains(
-                image,
-                "DataContextChanged=\"PendingImage_DataContextChanged\"");
-            StringAssert.Contains(image, "Unloaded=\"PendingImage_Unloaded\"");
-        }
-    }
+        AssertTemplateTextBinding(chapterTemplate, "Title", oneWay: false);
+        AssertTemplateTextBinding(chapterTemplate, "StatusText");
+        AssertTemplateTextBinding(chapterTemplate, "ErrorMessage");
+        AssertTemplateButton(
+            chapterTemplate,
+            "RetryBatchChapterButton",
+            "RetryBatchChapterButton_Click",
+            "CanRetryCreate");
+        AssertTemplateButton(
+            chapterTemplate,
+            "RemoveBatchChapterButton",
+            "RemoveBatchChapterButton_Click");
 
-    [TestMethod]
-    public void ChapterUploadUi_BindsQueuesAndDynamicItemState()
-    {
-        var xaml = ReadXamlSource();
-
-        StringAssert.Contains(
-            xaml,
-            "xmlns:viewModels=\"using:NovelM_App.Presentation.Publishing\"");
-        StringAssert.Contains(
-            ExtractNamedXamlStartTag(xaml, "PendingChapterImagesGridView"),
-            "ItemsSource=\"{x:Bind ViewModel.Editor.PendingChapterImages, Mode=OneWay}\"");
-        StringAssert.Contains(
-            ExtractNamedXamlStartTag(xaml, "PendingBatchChaptersList"),
-            "ItemsSource=\"{x:Bind ViewModel.Editor.PendingBatchChapters, Mode=OneWay}\"");
-        foreach (var binding in new[]
-                 {
-                     "Text=\"{x:Bind FileName, Mode=OneWay}\"",
-                     "Text=\"{x:Bind StatusText, Mode=OneWay}\"",
-                     "Text=\"{x:Bind ErrorMessage, Mode=OneWay}\"",
-                     "IsEnabled=\"{x:Bind CanReplace, Mode=OneWay}\"",
-                     "IsEnabled=\"{x:Bind CanRemove, Mode=OneWay}\"",
-                     "IsEnabled=\"{x:Bind CanRetryCreate, Mode=OneWay}\""
-                 })
-        {
-            StringAssert.Contains(xaml, binding);
-        }
+        var imageTemplate = FindTypedDataTemplate(
+            chapterTemplate,
+            "viewModels:PendingComicImage");
+        AssertPendingImagePreview(imageTemplate);
+        AssertTemplateTextBinding(imageTemplate, "FileName");
+        AssertTemplateTextBinding(imageTemplate, "StatusText");
+        AssertTemplateTextBinding(imageTemplate, "ErrorMessage");
+        var replaceButton = AssertTemplateButton(
+            imageTemplate,
+            "ReplaceBatchImageButton",
+            "ReplaceBatchImageButton_Click",
+            "CanReplace");
+        AssertAttribute(replaceButton, "Content", "重新选择并上传");
+        AssertTemplateButton(
+            imageTemplate,
+            "RemoveBatchImageButton",
+            "RemoveBatchImageButton_Click",
+            "CanRemove");
     }
 
     [TestMethod]
@@ -575,7 +588,7 @@ public sealed class PublishingPageTests
         return File.ReadAllText(pagePath);
     }
 
-    private static string ReadXamlSource()
+    private static XDocument ReadXamlDocument()
     {
         var testDirectory = Path.GetDirectoryName(CurrentSourceFile())!;
         var xamlPath = Path.GetFullPath(Path.Combine(
@@ -588,17 +601,118 @@ public sealed class PublishingPageTests
             "Presentation",
             "Publishing",
             "PublishingPage.xaml"));
-        return File.ReadAllText(xamlPath);
+        return XDocument.Load(xamlPath, LoadOptions.PreserveWhitespace);
     }
 
-    private static string ExtractNamedXamlStartTag(string xaml, string name)
+    private static XElement FindNamedElement(XContainer scope, string name)
     {
-        var match = Regex.Match(
-            xaml,
-            $"<[^>]+\\bx:Name=\\\"{Regex.Escape(name)}\\\"[^>]*>",
-            RegexOptions.Singleline);
-        Assert.IsTrue(match.Success, $"Missing named XAML control: {name}");
-        return match.Value;
+        var matches = scope.Descendants()
+            .Where(element =>
+                (string?)element.Attribute(XamlNamespace + "Name") == name)
+            .ToArray();
+        Assert.AreEqual(
+            1,
+            matches.Length,
+            $"Expected one named XAML control '{name}'.");
+        return matches.Single();
+    }
+
+    private static XElement FindTypedDataTemplate(
+        XElement scope,
+        string dataType)
+    {
+        var matches = scope.Descendants()
+            .Where(element =>
+                element.Name.LocalName == "DataTemplate"
+                && (string?)element.Attribute(XamlNamespace + "DataType") == dataType)
+            .ToArray();
+        Assert.AreEqual(
+            1,
+            matches.Length,
+            $"Expected one DataTemplate for '{dataType}' in '{scope.Name.LocalName}'.");
+        return matches.Single();
+    }
+
+    private static IEnumerable<XElement> OwnTemplateDescendants(
+        XElement template) =>
+        template.Descendants().Where(element => ReferenceEquals(
+            element.Ancestors().FirstOrDefault(ancestor =>
+                ancestor.Name.LocalName == "DataTemplate"),
+            template));
+
+    private static XElement FindNamedElementInTemplate(
+        XElement template,
+        string name)
+    {
+        var matches = OwnTemplateDescendants(template)
+            .Where(element =>
+                (string?)element.Attribute(XamlNamespace + "Name") == name)
+            .ToArray();
+        Assert.AreEqual(
+            1,
+            matches.Length,
+            $"Expected one '{name}' control in the '{(string?)template.Attribute(XamlNamespace + "DataType")}' template body.");
+        return matches.Single();
+    }
+
+    private static void AssertAttribute(
+        XElement element,
+        string attributeName,
+        string expectedValue)
+    {
+        Assert.AreEqual(
+            expectedValue,
+            (string?)element.Attribute(attributeName),
+            $"Unexpected {attributeName} on '{(string?)element.Attribute(XamlNamespace + "Name") ?? element.Name.LocalName}'.");
+    }
+
+    private static void AssertPendingImagePreview(XElement imageTemplate)
+    {
+        var images = OwnTemplateDescendants(imageTemplate)
+            .Where(element => element.Name.LocalName == "Image")
+            .ToArray();
+        Assert.AreEqual(1, images.Length, "Expected one preview Image in the image template.");
+        AssertAttribute(images[0], "Loaded", "PendingImage_Loaded");
+        AssertAttribute(
+            images[0],
+            "DataContextChanged",
+            "PendingImage_DataContextChanged");
+        AssertAttribute(images[0], "Unloaded", "PendingImage_Unloaded");
+    }
+
+    private static void AssertTemplateTextBinding(
+        XElement template,
+        string propertyName,
+        bool oneWay = true)
+    {
+        var expectedBinding = oneWay
+            ? $"{{x:Bind {propertyName}, Mode=OneWay}}"
+            : $"{{x:Bind {propertyName}}}";
+        Assert.IsTrue(
+            OwnTemplateDescendants(template).Any(element =>
+                element.Name.LocalName == "TextBlock"
+                && (string?)element.Attribute("Text") == expectedBinding),
+            $"Missing TextBlock binding '{expectedBinding}' in the '{(string?)template.Attribute(XamlNamespace + "DataType")}' template body.");
+    }
+
+    private static XElement AssertTemplateButton(
+        XElement template,
+        string name,
+        string clickHandler,
+        string? enabledProperty = null)
+    {
+        var button = FindNamedElementInTemplate(template, name);
+        Assert.AreEqual("Button", button.Name.LocalName);
+        AssertAttribute(button, "Click", clickHandler);
+        if (enabledProperty is not null)
+        {
+            AssertAttribute(
+                button,
+                "IsEnabled",
+                $"{{x:Bind {enabledProperty}, Mode=OneWay}}");
+        }
+
+        return button;
     }
 
     private static string ExtractSourceRange(
