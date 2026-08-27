@@ -46,13 +46,20 @@ public sealed record LocalImageFile(
     string FileName,
     byte[] Content);
 
+public sealed record LocalImageSource(
+    Guid Id,
+    string FileName,
+    string FilePath);
+
 public sealed record UploadedImage(
     string FileName,
-    string Url);
+    string Url,
+    Guid SourceId = default);
 
 public sealed record FailedImage(
     string FileName,
-    string Message);
+    string Message,
+    Guid SourceId = default);
 
 public sealed record ImageUploadBatchResult(
     IReadOnlyList<UploadedImage> Successes,

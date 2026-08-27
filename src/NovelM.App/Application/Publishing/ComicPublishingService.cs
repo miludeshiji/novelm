@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Common;
 using NovelM_App.Domain.Errors;
@@ -18,14 +17,15 @@ public sealed class ComicPublishingService : IComicPublishingService
             "完结"
         };
 
-    private static readonly IComparer<string> FileNameComparer =
-        new NaturalFileNameComparer();
-
     private readonly IComicPublishingApi _publishingApi;
+    private readonly ILocalImageReader _localImageReader;
 
-    public ComicPublishingService(IComicPublishingApi publishingApi)
+    public ComicPublishingService(
+        IComicPublishingApi publishingApi,
+        ILocalImageReader localImageReader)
     {
         _publishingApi = publishingApi;
+        _localImageReader = localImageReader;
     }
 
     public async Task<PageResult<MyComicSummary>> GetMyComicsAsync(
@@ -238,14 +238,14 @@ public sealed class ComicPublishingService : IComicPublishingService
     }
 
     public async Task<ImageUploadBatchResult> UploadImagesAsync(
-        IReadOnlyList<LocalImageFile> files,
+        IReadOnlyList<LocalImageSource> files,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var sortedFiles = files
             .Select((file, index) => new IndexedFile(file, index))
-            .OrderBy(item => item.File.FileName, FileNameComparer)
+            .OrderBy(item => item.File.FileName, NaturalNameComparer.Instance)
             .ThenBy(item => item.OriginalIndex)
             .Select(item => item.File)
             .ToArray();
@@ -279,7 +279,7 @@ public sealed class ComicPublishingService : IComicPublishingService
     }
 
     private async Task UploadOneAsync(
-        LocalImageFile file,
+        LocalImageSource file,
         int index,
         SemaphoreSlim semaphore,
         UploadedImage?[] successes,
@@ -292,10 +292,13 @@ public sealed class ComicPublishingService : IComicPublishingService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var url = await _publishingApi.UploadImageAsync(
-                    file,
+                var content = await _localImageReader.ReadAsync(
+                    file.FilePath,
                     cancellationToken);
-                successes[index] = new UploadedImage(file.FileName, url);
+                var url = await _publishingApi.UploadImageAsync(
+                    new LocalImageFile(file.FileName, content),
+                    cancellationToken);
+                successes[index] = new UploadedImage(file.FileName, url, file.Id);
             }
             catch (OperationCanceledException)
             {
@@ -310,7 +313,8 @@ public sealed class ComicPublishingService : IComicPublishingService
             {
                 failures[index] = new FailedImage(
                     file.FileName,
-                    exception.Message);
+                    exception.Message,
+                    file.Id);
             }
         }
         finally
@@ -404,75 +408,6 @@ public sealed class ComicPublishingService : IComicPublishingService
         new(AppErrorKind.Validation, message);
 
     private sealed record IndexedFile(
-        LocalImageFile File,
+        LocalImageSource File,
         int OriginalIndex);
-
-    private sealed class NaturalFileNameComparer : IComparer<string>
-    {
-        public int Compare(string? left, string? right)
-        {
-            if (ReferenceEquals(left, right))
-            {
-                return 0;
-            }
-
-            if (left is null)
-            {
-                return -1;
-            }
-
-            if (right is null)
-            {
-                return 1;
-            }
-
-            var leftParts = Regex.Matches(left, @"\d+|\D+");
-            var rightParts = Regex.Matches(right, @"\d+|\D+");
-            var sharedPartCount = Math.Min(leftParts.Count, rightParts.Count);
-
-            for (var index = 0; index < sharedPartCount; index++)
-            {
-                var leftPart = leftParts[index].Value;
-                var rightPart = rightParts[index].Value;
-                int comparison;
-
-                if (char.IsDigit(leftPart[0]) && char.IsDigit(rightPart[0]))
-                {
-                    comparison = CompareNumericParts(leftPart, rightPart);
-                }
-                else
-                {
-                    comparison = StringComparer.CurrentCultureIgnoreCase.Compare(
-                        leftPart,
-                        rightPart);
-                }
-
-                if (comparison != 0)
-                {
-                    return comparison;
-                }
-            }
-
-            return leftParts.Count.CompareTo(rightParts.Count);
-        }
-
-        private static int CompareNumericParts(string left, string right)
-        {
-            if (long.TryParse(left, out var leftNumber) &&
-                long.TryParse(right, out var rightNumber))
-            {
-                return leftNumber.CompareTo(rightNumber);
-            }
-
-            var normalizedLeft = left.TrimStart('0');
-            var normalizedRight = right.TrimStart('0');
-            normalizedLeft = normalizedLeft.Length == 0 ? "0" : normalizedLeft;
-            normalizedRight = normalizedRight.Length == 0 ? "0" : normalizedRight;
-
-            var lengthComparison = normalizedLeft.Length.CompareTo(normalizedRight.Length);
-            return lengthComparison != 0
-                ? lengthComparison
-                : StringComparer.Ordinal.Compare(normalizedLeft, normalizedRight);
-        }
-    }
 }

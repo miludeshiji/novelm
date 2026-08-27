@@ -369,7 +369,6 @@ public sealed partial class PublishingPage : Page
             }
 
             var path = file.Path;
-            var bytes = await File.ReadAllBytesAsync(path, cancellation.Value);
             if (!ReferenceEquals(_pageCancellation, pageCancellation)
                 || Editor.BookId != bookId)
             {
@@ -377,7 +376,7 @@ public sealed partial class PublishingPage : Page
             }
 
             await Editor.UploadCoverAsync(
-                new LocalImageFile(Path.GetFileName(path), bytes),
+                new LocalImageSource(Guid.NewGuid(), Path.GetFileName(path), path),
                 cancellation.Value);
         }
         catch (OperationCanceledException) when (cancellation.Value.IsCancellationRequested)
@@ -612,13 +611,12 @@ public sealed partial class PublishingPage : Page
                 return;
             }
 
-            var localFiles = new List<LocalImageFile>(files.Count);
-            foreach (var file in files)
-            {
-                var path = file.Path;
-                var bytes = await File.ReadAllBytesAsync(path, cancellation.Value);
-                localFiles.Add(new LocalImageFile(Path.GetFileName(path), bytes));
-            }
+            var localFiles = files
+                .Select(file => new LocalImageSource(
+                    Guid.NewGuid(),
+                    Path.GetFileName(file.Path),
+                    file.Path))
+                .ToArray();
 
             if (!ReferenceEquals(_pageCancellation, pageCancellation)
                 || Editor.BookId != bookId

@@ -897,7 +897,8 @@ public sealed class ComicEditorViewModelTests
     internal static UserProfile Profile(int interiorLevel = 3) =>
         new(7, "author", "avatar", "Creator", interiorLevel);
 
-    internal static LocalImageFile File(string name) => new(name, [1, 2, 3]);
+    internal static LocalImageSource File(string name) =>
+        new(Guid.NewGuid(), name, $"C:\\images\\{name}");
 
     internal static ComicEditDetails Details() => new(
         42,
@@ -953,7 +954,7 @@ internal sealed class FakeComicPublishingService : IComicPublishingService
     public Func<long, int, ComicChapterDraft, CancellationToken, Task<CreateChapterResult>>? CreateChapterHandler { get; set; }
     public Func<long, int, CancellationToken, Task>? DeleteChapterHandler { get; set; }
     public Func<long, int, int, CancellationToken, Task>? ReorderChapterHandler { get; set; }
-    public Func<IReadOnlyList<LocalImageFile>, CancellationToken, Task<ImageUploadBatchResult>>? UploadHandler { get; set; }
+    public Func<IReadOnlyList<LocalImageSource>, CancellationToken, Task<ImageUploadBatchResult>>? UploadHandler { get; set; }
 
     public int GetMyComicsCalls { get; private set; }
     public int CreateComicCalls { get; private set; }
@@ -1073,7 +1074,7 @@ internal sealed class FakeComicPublishingService : IComicPublishingService
             ?? throw new AssertFailedException("ReorderChapterAsync was not expected.");
     }
 
-    public Task<ImageUploadBatchResult> UploadImagesAsync(IReadOnlyList<LocalImageFile> files, CancellationToken cancellationToken)
+    public Task<ImageUploadBatchResult> UploadImagesAsync(IReadOnlyList<LocalImageSource> files, CancellationToken cancellationToken)
     {
         UploadCalls++;
         LastCancellationToken = cancellationToken;

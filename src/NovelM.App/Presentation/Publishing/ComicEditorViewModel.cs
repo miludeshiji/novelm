@@ -789,7 +789,7 @@ public sealed class ComicEditorViewModel : ObservableObject
     }
 
     public Task UploadChapterImagesAsync(
-        IReadOnlyList<LocalImageFile> files,
+        IReadOnlyList<LocalImageSource> files,
         CancellationToken cancellationToken)
     {
         if (!IsLoaded
@@ -822,7 +822,7 @@ public sealed class ComicEditorViewModel : ObservableObject
     }
 
     public Task UploadCoverAsync(
-        LocalImageFile file,
+        LocalImageSource file,
         CancellationToken cancellationToken)
     {
         if (!IsLoaded || BookId is not long bookId)
@@ -873,7 +873,7 @@ public sealed class ComicEditorViewModel : ObservableObject
     }
 
     private async Task UploadAsync(
-        IReadOnlyList<LocalImageFile> files,
+        IReadOnlyList<LocalImageSource> files,
         Func<bool> isContextCurrent,
         Action<ImageUploadBatchResult> applySuccesses,
         CancellationToken cancellationToken)
