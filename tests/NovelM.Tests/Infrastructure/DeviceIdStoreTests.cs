@@ -18,13 +18,14 @@ public sealed class DeviceIdStoreTests
         var created = await store.GetOrCreateAsync(CancellationToken.None);
         var reused = await store.GetOrCreateAsync(CancellationToken.None);
 
-        Assert.AreNotEqual(Guid.Empty, created);
+        Assert.IsTrue(Guid.TryParseExact(created, "D", out var parsed));
+        Assert.AreNotEqual(Guid.Empty, parsed);
         Assert.AreEqual(created, reused);
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(paths.DeviceFile));
         var properties = document.RootElement.EnumerateObject().ToArray();
         Assert.HasCount(1, properties);
         Assert.AreEqual("Id", properties[0].Name);
-        Assert.AreEqual(created.ToString("D"), properties[0].Value.GetString());
+        Assert.AreEqual(created, properties[0].Value.GetString());
     }
 
     [TestMethod]
@@ -52,9 +53,9 @@ public sealed class DeviceIdStoreTests
 
         using var document = JsonDocument.Parse(
             await File.ReadAllTextAsync(paths.DeviceFile));
-        var persisted = Guid.ParseExact(
-            document.RootElement.GetProperty("Id").GetString()!,
-            "D");
+        var persisted = document.RootElement.GetProperty("Id").GetString();
+        Assert.IsNotNull(persisted);
+        Assert.IsTrue(Guid.TryParseExact(persisted, "D", out _));
         Assert.IsTrue(results.All(result => result == persisted));
         CollectionAssert.AreEquivalent(
             new[] { paths.DeviceFile },
@@ -77,15 +78,92 @@ public sealed class DeviceIdStoreTests
     }
 
     [TestMethod]
-    public Task GetOrCreateAsync_InvalidGuid_ThrowsStorageWithoutChangingFile()
+    public async Task GetOrCreateAsync_NonGuidIdentity_ReturnsStoredValue()
     {
-        return AssertInvalidFileRemainsUnchangedAsync("""{"Id":"not-a-guid"}""");
+        using var temporaryDirectory = new TemporaryDirectory();
+        var paths = new AppPaths(temporaryDirectory.Path);
+        await File.WriteAllTextAsync(
+            paths.DeviceFile,
+            """{"Id":"web-fingerprint-id"}""");
+
+        var result = await new DeviceIdStore(paths)
+            .GetOrCreateAsync(CancellationToken.None);
+
+        Assert.AreEqual("web-fingerprint-id", result);
     }
 
     [TestMethod]
-    public Task GetOrCreateAsync_EmptyGuid_ThrowsStorageWithoutChangingFile()
+    public Task GetOrCreateAsync_BlankIdentity_ThrowsStorageWithoutChangingFile()
     {
-        return AssertInvalidFileRemainsUnchangedAsync("""{"Id":"00000000-0000-0000-0000-000000000000"}""");
+        return AssertInvalidFileRemainsUnchangedAsync("""{"Id":"   "}""");
+    }
+
+    [TestMethod]
+    public Task GetOrCreateAsync_ControlCharacterIdentity_ThrowsStorageWithoutChangingFile()
+    {
+        return AssertInvalidFileRemainsUnchangedAsync("""{"Id":"bad\u0001id"}""");
+    }
+
+    [TestMethod]
+    public Task GetOrCreateAsync_OversizedIdentity_ThrowsStorageWithoutChangingFile()
+    {
+        return AssertInvalidFileRemainsUnchangedAsync(
+            JsonSerializer.Serialize(new { Id = new string('x', 257) }));
+    }
+
+    [TestMethod]
+    public async Task SetAsync_WebVisitorId_ReplacesPersistedIdentityWithoutTemporaryFiles()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var paths = new AppPaths(temporaryDirectory.Path);
+        var store = new DeviceIdStore(paths);
+        await store.GetOrCreateAsync(CancellationToken.None);
+
+        await store.SetAsync("web-fingerprint-0123456789", CancellationToken.None);
+
+        Assert.AreEqual(
+            "web-fingerprint-0123456789",
+            await store.GetOrCreateAsync(CancellationToken.None));
+        CollectionAssert.AreEquivalent(
+            new[] { paths.DeviceFile },
+            Directory.GetFiles(paths.DataDirectory));
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("valid\rmalicious")]
+    public async Task SetAsync_InvalidIdentity_RejectsBeforeChangingFile(string value)
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var paths = new AppPaths(temporaryDirectory.Path);
+        var store = new DeviceIdStore(paths);
+        await store.SetAsync("original-web-id", CancellationToken.None);
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(
+            () => store.SetAsync(value, CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Validation, exception.Kind);
+        Assert.AreEqual(
+            "original-web-id",
+            await store.GetOrCreateAsync(CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task SetAsync_IdentityLongerThanLimit_RejectsBeforeChangingFile()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var paths = new AppPaths(temporaryDirectory.Path);
+        var store = new DeviceIdStore(paths);
+        await store.SetAsync("original-web-id", CancellationToken.None);
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            store.SetAsync(new string('x', 257), CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Validation, exception.Kind);
+        Assert.AreEqual(
+            "original-web-id",
+            await store.GetOrCreateAsync(CancellationToken.None));
     }
 
     [TestMethod]

@@ -43,7 +43,7 @@ public partial class App : Microsoft.UI.Xaml.Application
             await paths.EnsureWritableAsync(CancellationToken.None);
             startupStage = "创建设备标识";
             await Services
-                .GetRequiredService<DeviceIdStore>()
+                .GetRequiredService<IDeviceIdStore>()
                 .GetOrCreateAsync(CancellationToken.None);
             startupStage = "加载节点设置";
             await Services
@@ -74,7 +74,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         var paths = AppPaths.ForRuntime();
 
         services.AddSingleton(paths);
-        services.AddSingleton<DeviceIdStore>();
+        services.AddSingleton<IDeviceIdStore>(provider =>
+            new DeviceIdStore(provider.GetRequiredService<AppPaths>()));
         services.AddSingleton<IApiServerManager>(provider =>
         {
             var appPaths = provider.GetRequiredService<AppPaths>();

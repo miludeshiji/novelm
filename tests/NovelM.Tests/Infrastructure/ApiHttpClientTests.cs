@@ -44,7 +44,7 @@ public sealed class ApiHttpClientTests
         var persistedDeviceId = await fixture.DeviceIdStore.GetOrCreateAsync(
             CancellationToken.None);
         CollectionAssert.AreEqual(
-            new[] { persistedDeviceId.ToString("D") },
+            new[] { persistedDeviceId },
             request.Headers["x-id"]);
         AssertBody(
             request.Body,
@@ -105,7 +105,7 @@ public sealed class ApiHttpClientTests
             requests.Select(request => ReadLoginBody(request.Body)).ToArray());
         var persistedDeviceId = await fixture.DeviceIdStore.GetOrCreateAsync(
             CancellationToken.None);
-        var expectedHeader = persistedDeviceId.ToString("D");
+        var expectedHeader = persistedDeviceId;
         Assert.IsTrue(requests.All(request =>
             request.Headers.TryGetValue("x-id", out var values)
             && values.Length == 1
@@ -150,6 +150,22 @@ public sealed class ApiHttpClientTests
             request.RequestUri);
         Assert.IsFalse(request.Headers.ContainsKey("Authorization"));
         AssertBody(request.Body, ("token", "synthetic-refresh-token"));
+    }
+
+    [TestMethod]
+    public async Task RefreshAsync_AfterDeviceIdentityImportUsesImportedHeader()
+    {
+        using var fixture = await ApiFixture.CreateAsync(_ => JsonResponse(
+            """{"success":true,"response":"new-session-token","status":200}"""));
+        await fixture.DeviceIdStore.SetAsync(
+            "web-fingerprint-0123456789",
+            CancellationToken.None);
+
+        await fixture.Api.RefreshAsync("synthetic-refresh-token", CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "web-fingerprint-0123456789" },
+            fixture.Handler.Requests.Single().Headers["x-id"]);
     }
 
     [TestMethod]
@@ -383,7 +399,7 @@ public sealed class ApiHttpClientTests
         var persistedDeviceId = await fixture.DeviceIdStore.GetOrCreateAsync(
             CancellationToken.None);
         CollectionAssert.AreEqual(
-            new[] { persistedDeviceId.ToString("D") },
+            new[] { persistedDeviceId },
             request.Headers["x-id"]);
         CollectionAssert.AreEqual(
             new[] { "application/json" },

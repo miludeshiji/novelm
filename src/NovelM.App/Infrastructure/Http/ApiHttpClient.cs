@@ -3,7 +3,6 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Errors;
-using NovelM_App.Infrastructure.Storage;
 
 namespace NovelM_App.Infrastructure.Http;
 
@@ -19,12 +18,12 @@ internal sealed class ApiHttpClient
 
     private readonly HttpClient _httpClient;
     private readonly IApiServerManager _serverManager;
-    private readonly DeviceIdStore _deviceIdStore;
+    private readonly IDeviceIdStore _deviceIdStore;
 
     public ApiHttpClient(
         HttpClient httpClient,
         IApiServerManager serverManager,
-        DeviceIdStore deviceIdStore)
+        IDeviceIdStore deviceIdStore)
     {
         _httpClient = httpClient;
         _serverManager = serverManager;
@@ -94,7 +93,7 @@ internal sealed class ApiHttpClient
     private static HttpRequestMessage CreateRequest<TRequest>(
         Uri requestUri,
         TRequest payload,
-        Guid deviceId)
+        string deviceId)
     {
         var content = new ByteArrayContent(
             JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions));
@@ -109,7 +108,7 @@ internal sealed class ApiHttpClient
         };
         request.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.TryAddWithoutValidation("x-id", deviceId.ToString("D"));
+        request.Headers.TryAddWithoutValidation("x-id", deviceId);
         return request;
     }
 
