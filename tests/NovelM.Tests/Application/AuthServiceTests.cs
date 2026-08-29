@@ -51,7 +51,8 @@ public sealed class AuthServiceTests
                 typeof(IAuthApi),
                 typeof(IAuthSession),
                 typeof(ISignalRConnection),
-                typeof(IUserApi)
+                typeof(IUserApi),
+                typeof(IDeviceIdStore)
             },
             constructor.GetParameters()
                 .Select(parameter => parameter.ParameterType)
@@ -218,6 +219,283 @@ public sealed class AuthServiceTests
             fixture.Operations.Select(operation => operation.Name).ToArray());
         Assert.AreSame(fixture.AuthApi.Tokens, fixture.Session.LastTokens);
         Assert.AreEqual(0, fixture.Session.ClearCount);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_ValidInput_ReplacesCredentialsInOrder()
+    {
+        var fixture = CreateFixture();
+        fixture.Session.AccessToken = "imported-session-token";
+
+        var result = await fixture.Service.LoginWithRefreshTokenAsync(
+            "  imported-refresh-token  ",
+            "  web-fingerprint-id  ",
+            CancellationToken.None);
+
+        Assert.AreSame(fixture.UserApi.Profile, result);
+        Assert.AreSame(result, fixture.Service.CurrentUser);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "set-device-id",
+                "import-refresh-token",
+                "get-access-token",
+                "restart",
+                "get-my-info"
+            },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-fingerprint-id", fixture.DeviceIdStore.Current);
+        Assert.AreEqual(
+            "imported-refresh-token",
+            fixture.Session.ImportedRefreshToken);
+    }
+
+    [TestMethod]
+    public void LoginWithRefreshTokenAsync_IsSynchronousEntryPoint()
+    {
+        var method = typeof(AuthService).GetMethod(
+            nameof(AuthService.LoginWithRefreshTokenAsync));
+
+        Assert.IsNotNull(method);
+        Assert.IsNull(method.GetCustomAttribute<AsyncStateMachineAttribute>());
+    }
+
+    [TestMethod]
+    [DataRow("", "web-id")]
+    [DataRow("token", "")]
+    [DataRow("valid\rmalicious", "web-id")]
+    [DataRow("token", "valid\rmalicious")]
+    public async Task LoginWithRefreshTokenAsync_InvalidInputRejectsBeforeDependencies(
+        string refreshToken,
+        string deviceId)
+    {
+        var fixture = CreateFixture();
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                refreshToken,
+                deviceId,
+                CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Validation, exception.Kind);
+        if (refreshToken.Length > 0)
+        {
+            Assert.IsFalse(exception.Message.Contains(
+                refreshToken,
+                StringComparison.Ordinal));
+        }
+
+        if (deviceId.Length > 0)
+        {
+            Assert.IsFalse(exception.Message.Contains(
+                deviceId,
+                StringComparison.Ordinal));
+        }
+
+        Assert.HasCount(0, fixture.Operations);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_OversizedInputRejectsBeforeDependencies()
+    {
+        foreach (var (refreshToken, deviceId) in new[]
+                 {
+                     (new string('r', 16_385), "web-id"),
+                     ("token", new string('x', 257))
+                 })
+        {
+            var fixture = CreateFixture();
+
+            var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+                fixture.Service.LoginWithRefreshTokenAsync(
+                    refreshToken,
+                    deviceId,
+                    CancellationToken.None));
+
+            Assert.AreEqual(AppErrorKind.Validation, exception.Kind);
+            Assert.HasCount(0, fixture.Operations);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_DeviceSaveFails_DoesNotImportToken()
+    {
+        var fixture = CreateFixture();
+        var failure = Error(AppErrorKind.Storage);
+        fixture.DeviceIdStore.SetException = failure;
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                "imported-refresh",
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        CollectionAssert.AreEqual(
+            new[] { "set-device-id" },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.IsNull(fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_TokenImportFails_KeepsNewDeviceId()
+    {
+        var fixture = CreateFixture();
+        var failure = Error(AppErrorKind.Storage);
+        fixture.Session.ImportException = failure;
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                "imported-refresh",
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        CollectionAssert.AreEqual(
+            new[] { "set-device-id", "import-refresh-token" },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-id", fixture.DeviceIdStore.Current);
+        Assert.IsNull(fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_RefreshFails_KeepsImportedCredentials()
+    {
+        var fixture = CreateFixture();
+        var failure = Error(AppErrorKind.Transport);
+        fixture.Session.GetAccessTokenException = failure;
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                "imported-refresh",
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "set-device-id",
+                "import-refresh-token",
+                "get-access-token"
+            },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-id", fixture.DeviceIdStore.Current);
+        Assert.AreEqual("imported-refresh", fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_NoSessionToken_ThrowsUnauthorizedAfterImport()
+    {
+        var fixture = CreateFixture();
+        const string refreshToken = "imported-refresh-secret";
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                refreshToken,
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreEqual(AppErrorKind.Unauthorized, exception.Kind);
+        Assert.IsFalse(exception.Message.Contains(
+            refreshToken,
+            StringComparison.Ordinal));
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "set-device-id",
+                "import-refresh-token",
+                "get-access-token"
+            },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-id", fixture.DeviceIdStore.Current);
+        Assert.AreEqual(refreshToken, fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_RestartFails_KeepsImportedCredentials()
+    {
+        var fixture = CreateFixture();
+        fixture.Session.AccessToken = "imported-session";
+        var failure = Error(AppErrorKind.Transport);
+        fixture.Connection.RestartException = failure;
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                "imported-refresh",
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "set-device-id",
+                "import-refresh-token",
+                "get-access-token",
+                "restart"
+            },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-id", fixture.DeviceIdStore.Current);
+        Assert.AreEqual("imported-refresh", fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_GetMyInfoFails_KeepsImportedCredentials()
+    {
+        var fixture = CreateFixture();
+        fixture.Session.AccessToken = "imported-session";
+        var failure = Error(AppErrorKind.Protocol);
+        fixture.UserApi.Handler = _ => Task.FromException<UserProfile>(failure);
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Service.LoginWithRefreshTokenAsync(
+                "imported-refresh",
+                "web-id",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "set-device-id",
+                "import-refresh-token",
+                "get-access-token",
+                "restart",
+                "get-my-info"
+            },
+            fixture.Operations.Select(operation => operation.Name).ToArray());
+        Assert.AreEqual("web-id", fixture.DeviceIdStore.Current);
+        Assert.AreEqual("imported-refresh", fixture.Session.ImportedRefreshToken);
+        Assert.IsNull(fixture.Service.CurrentUser);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenAsync_LogoutRejectsStaleProfileResult()
+    {
+        var fixture = CreateFixture();
+        fixture.Session.AccessToken = "imported-session";
+        var profileCompletion = new TaskCompletionSource<UserProfile>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.UserApi.Handler = _ => profileCompletion.Task;
+
+        var login = fixture.Service.LoginWithRefreshTokenAsync(
+            "imported-refresh",
+            "web-id",
+            CancellationToken.None);
+        Assert.AreEqual("get-my-info", fixture.Operations[^1].Name);
+
+        await fixture.Service.LogoutAsync(CancellationToken.None);
+        profileCompletion.SetResult(fixture.UserApi.Profile);
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => login);
         Assert.IsNull(fixture.Service.CurrentUser);
     }
 
@@ -548,12 +826,19 @@ public sealed class AuthServiceTests
         var session = new FakeAuthSession(operations);
         var connection = new FakeSignalRConnection(operations);
         var userApi = new FakeUserApi(operations);
+        var deviceIdStore = new FakeDeviceIdStore(operations);
         return new Fixture(
-            new AuthService(authApi, session, connection, userApi),
+            new AuthService(
+                authApi,
+                session,
+                connection,
+                userApi,
+                deviceIdStore),
             authApi,
             session,
             connection,
             userApi,
+            deviceIdStore,
             operations);
     }
 
@@ -578,6 +863,7 @@ public sealed class AuthServiceTests
         FakeAuthSession Session,
         FakeSignalRConnection Connection,
         FakeUserApi UserApi,
+        FakeDeviceIdStore DeviceIdStore,
         List<Operation> Operations);
 
     private sealed record Operation(
@@ -641,7 +927,13 @@ public sealed class AuthServiceTests
 
         public LoginTokens? LastTokens { get; private set; }
 
+        public string? ImportedRefreshToken { get; private set; }
+
         public int ClearCount { get; private set; }
+
+        public Exception? ImportException { get; set; }
+
+        public Exception? GetAccessTokenException { get; set; }
 
         public Exception? ClearException { get; set; }
 
@@ -669,6 +961,13 @@ public sealed class AuthServiceTests
                 refreshToken,
                 null,
                 cancellationToken));
+            if (ImportException is not null)
+            {
+                return Task.FromException(ImportException);
+            }
+
+            ImportedRefreshToken = refreshToken;
+            LastTokens = null;
             return Task.CompletedTask;
         }
 
@@ -679,12 +978,14 @@ public sealed class AuthServiceTests
                 null,
                 null,
                 cancellationToken));
-            return Task.FromResult(AccessToken);
+            return GetAccessTokenException is null
+                ? Task.FromResult(AccessToken)
+                : Task.FromException<string?>(GetAccessTokenException);
         }
 
         public void InvalidateSessionToken()
         {
-            throw new AssertFailedException("InvalidateSessionToken was not expected.");
+            AccessToken = null;
         }
 
         public Task ClearAsync(CancellationToken cancellationToken)
@@ -697,6 +998,43 @@ public sealed class AuthServiceTests
             }
 
             return ClearHandler?.Invoke(cancellationToken) ?? Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeDeviceIdStore : IDeviceIdStore
+    {
+        private readonly List<Operation> _operations;
+
+        public FakeDeviceIdStore(List<Operation> operations)
+        {
+            _operations = operations;
+        }
+
+        public string? Current { get; private set; }
+
+        public Exception? SetException { get; set; }
+
+        public Task<string> GetOrCreateAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(Current ?? "generated-device-id");
+        }
+
+        public Task SetAsync(
+            string deviceId,
+            CancellationToken cancellationToken)
+        {
+            _operations.Add(new Operation(
+                "set-device-id",
+                deviceId,
+                null,
+                cancellationToken));
+            if (SetException is not null)
+            {
+                return Task.FromException(SetException);
+            }
+
+            Current = deviceId;
+            return Task.CompletedTask;
         }
     }
 

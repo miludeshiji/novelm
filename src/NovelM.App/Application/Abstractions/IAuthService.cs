@@ -13,5 +13,10 @@ public interface IAuthService
         string rawPassword,
         CancellationToken cancellationToken);
 
+    Task<UserProfile> LoginWithRefreshTokenAsync(
+        string refreshToken,
+        string deviceId,
+        CancellationToken cancellationToken);
+
     Task LogoutAsync(CancellationToken cancellationToken);
 }

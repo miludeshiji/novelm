@@ -517,6 +517,13 @@ public sealed class PublishingViewModelTests
         public Task<UserProfile> LoginAsync(string email, string rawPassword, CancellationToken cancellationToken) =>
             throw new AssertFailedException("LoginAsync was not expected.");
 
+        public Task<UserProfile> LoginWithRefreshTokenAsync(
+            string refreshToken,
+            string deviceId,
+            CancellationToken cancellationToken) =>
+            throw new AssertFailedException(
+                "LoginWithRefreshTokenAsync was not expected.");
+
         public Task LogoutAsync(CancellationToken cancellationToken) =>
             throw new AssertFailedException("LogoutAsync was not expected.");
     }

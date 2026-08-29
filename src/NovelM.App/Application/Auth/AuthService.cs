@@ -13,6 +13,7 @@ public sealed class AuthService : IAuthService
     private readonly IAuthSession _authSession;
     private readonly ISignalRConnection _signalRConnection;
     private readonly IUserApi _userApi;
+    private readonly IDeviceIdStore _deviceIdStore;
     private readonly SemaphoreSlim _authLifecycleGate = new(1, 1);
     private readonly object _userStateLock = new();
     private UserProfile? _currentUser;
@@ -24,12 +25,14 @@ public sealed class AuthService : IAuthService
         IAuthApi authApi,
         IAuthSession authSession,
         ISignalRConnection signalRConnection,
-        IUserApi userApi)
+        IUserApi userApi,
+        IDeviceIdStore deviceIdStore)
     {
         _authApi = authApi;
         _authSession = authSession;
         _signalRConnection = signalRConnection;
         _userApi = userApi;
+        _deviceIdStore = deviceIdStore;
     }
 
     public UserProfile? CurrentUser => Volatile.Read(ref _currentUser);
@@ -110,6 +113,63 @@ public sealed class AuthService : IAuthService
                 EnsureUserOperationIsActive(operation.Generation);
                 await _authSession.SetTokensAsync(tokens, cancellationToken);
                 await _signalRConnection.RestartAsync(cancellationToken);
+            }
+            finally
+            {
+                _authLifecycleGate.Release();
+            }
+
+            var user = await _userApi.GetMyInfoAsync(operation.CancellationToken);
+            CompleteUserOperation(operation.Generation, user);
+            return user;
+        }
+    }
+
+    public Task<UserProfile> LoginWithRefreshTokenAsync(
+        string refreshToken,
+        string deviceId,
+        CancellationToken cancellationToken)
+    {
+        var normalizedRefreshToken =
+            ImportedCredentialValidator.NormalizeRefreshToken(refreshToken);
+        var normalizedDeviceId =
+            ImportedCredentialValidator.NormalizeDeviceId(deviceId);
+        var operation = BeginUserOperation(cancellationToken);
+        return CompleteRefreshTokenLoginAsync(
+            normalizedRefreshToken,
+            normalizedDeviceId,
+            operation);
+    }
+
+    private async Task<UserProfile> CompleteRefreshTokenLoginAsync(
+        string refreshToken,
+        string deviceId,
+        UserOperation operation)
+    {
+        using (operation)
+        {
+            await _authLifecycleGate.WaitAsync(operation.CancellationToken);
+            try
+            {
+                EnsureUserOperationIsActive(operation.Generation);
+                await _deviceIdStore.SetAsync(
+                    deviceId,
+                    operation.CancellationToken);
+                await _authSession.ImportRefreshTokenAsync(
+                    refreshToken,
+                    operation.CancellationToken);
+                var accessToken = await _authSession.GetAccessTokenAsync(
+                    operation.CancellationToken);
+                if (string.IsNullOrWhiteSpace(accessToken))
+                {
+                    _authSession.InvalidateSessionToken();
+                    throw new AppException(
+                        AppErrorKind.Unauthorized,
+                        "The imported refresh token could not establish a session.");
+                }
+
+                EnsureUserOperationIsActive(operation.Generation);
+                await _signalRConnection.RestartAsync(operation.CancellationToken);
             }
             finally
             {

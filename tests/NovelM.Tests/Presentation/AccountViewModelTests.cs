@@ -300,6 +300,15 @@ public sealed class AccountViewModelTests
             return profile;
         }
 
+        public Task<UserProfile> LoginWithRefreshTokenAsync(
+            string refreshToken,
+            string deviceId,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException(
+                "LoginWithRefreshTokenAsync was not expected.");
+        }
+
         public async Task LogoutAsync(CancellationToken cancellationToken)
         {
             LogoutCount++;
