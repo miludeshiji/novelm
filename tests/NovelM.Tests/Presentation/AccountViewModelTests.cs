@@ -116,6 +116,143 @@ public sealed class AccountViewModelTests
     }
 
     [TestMethod]
+    public async Task LoginWithRefreshTokenCommand_SuccessNormalizesClearsSecretAndPublishesProfile()
+    {
+        var profile = Profile();
+        var service = new FakeAuthService
+        {
+            RefreshTokenLoginHandler = (_, _, _) => Task.FromResult(profile)
+        };
+        var viewModel = CreateViewModel(service);
+        viewModel.RefreshToken = "  imported-refresh  ";
+        viewModel.DeviceId = "  web-fingerprint-id  ";
+
+        await viewModel.LoginWithRefreshTokenCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, service.RefreshTokenLoginCount);
+        Assert.AreEqual("imported-refresh", service.LoginRefreshToken);
+        Assert.AreEqual("web-fingerprint-id", service.LoginDeviceId);
+        Assert.AreSame(profile, viewModel.CurrentUser);
+        Assert.AreEqual(string.Empty, viewModel.RefreshToken);
+        Assert.AreEqual("  web-fingerprint-id  ", viewModel.DeviceId);
+        Assert.IsNull(viewModel.ErrorMessage);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenCommand_FailureClearsSecretAndRetainsDeviceId()
+    {
+        var service = new FakeAuthService
+        {
+            RefreshTokenLoginHandler = (_, _, _) =>
+                Task.FromException<UserProfile>(
+                    Error(AppErrorKind.Transport, "Synthetic transport detail"))
+        };
+        var viewModel = CreateViewModel(service);
+        viewModel.RefreshToken = "imported-refresh";
+        viewModel.DeviceId = "web-fingerprint-id";
+
+        await viewModel.LoginWithRefreshTokenCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, service.RefreshTokenLoginCount);
+        Assert.AreEqual(string.Empty, viewModel.RefreshToken);
+        Assert.AreEqual("web-fingerprint-id", viewModel.DeviceId);
+        Assert.IsNull(viewModel.CurrentUser);
+        Assert.AreEqual(
+            "网络连接失败，请检查网络后重试。",
+            viewModel.ErrorMessage);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
+    [DataRow("", "web-id", "请输入 RefreshToken。")]
+    [DataRow("token", "", "请输入有效的 x-id。")]
+    [DataRow("valid\rmalicious", "web-id", "RefreshToken 格式无效。")]
+    [DataRow("token", "valid\rmalicious", "x-id 格式无效。")]
+    public async Task LoginWithRefreshTokenCommand_InvalidInputDoesNotCallService(
+        string refreshToken,
+        string deviceId,
+        string expectedMessage)
+    {
+        var service = new FakeAuthService();
+        var viewModel = CreateViewModel(service);
+        viewModel.RefreshToken = refreshToken;
+        viewModel.DeviceId = deviceId;
+
+        await viewModel.LoginWithRefreshTokenCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(0, service.RefreshTokenLoginCount);
+        Assert.AreEqual(expectedMessage, viewModel.ErrorMessage);
+        Assert.AreEqual(string.Empty, viewModel.RefreshToken);
+        Assert.AreEqual(deviceId, viewModel.DeviceId);
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenCommand_OversizedInputDoesNotCallService()
+    {
+        foreach (var (refreshToken, deviceId, expectedMessage) in new[]
+                 {
+                     (
+                         new string('r', 16_385),
+                         "web-id",
+                         "RefreshToken 格式无效。"),
+                     (
+                         "token",
+                         new string('x', 257),
+                         "x-id 格式无效。")
+                 })
+        {
+            var service = new FakeAuthService();
+            var viewModel = CreateViewModel(service);
+            viewModel.RefreshToken = refreshToken;
+            viewModel.DeviceId = deviceId;
+
+            await viewModel.LoginWithRefreshTokenCommand.ExecuteAsync(null);
+
+            Assert.AreEqual(0, service.RefreshTokenLoginCount);
+            Assert.AreEqual(expectedMessage, viewModel.ErrorMessage);
+            Assert.AreEqual(string.Empty, viewModel.RefreshToken);
+            Assert.AreEqual(deviceId, viewModel.DeviceId);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoginWithRefreshTokenCommand_WhilePendingBlocksPasswordLogin()
+    {
+        var tokenLoginEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var profileCompletion = new TaskCompletionSource<UserProfile>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeAuthService
+        {
+            RefreshTokenLoginHandler = (_, _, _) =>
+            {
+                tokenLoginEntered.TrySetResult();
+                return profileCompletion.Task;
+            }
+        };
+        var viewModel = CreateViewModel(service);
+        viewModel.RefreshToken = "imported-refresh";
+        viewModel.DeviceId = "web-id";
+        viewModel.Email = "reader@example.com";
+        viewModel.Password = "password123";
+
+        var tokenLogin =
+            viewModel.LoginWithRefreshTokenCommand.ExecuteAsync(null);
+        await tokenLoginEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        viewModel.LoginCommand.Execute(null);
+
+        Assert.IsTrue(viewModel.IsBusy);
+        Assert.AreEqual(1, service.RefreshTokenLoginCount);
+        Assert.AreEqual(0, service.LoginCount);
+
+        profileCompletion.SetResult(Profile());
+        await tokenLogin.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsFalse(viewModel.IsBusy);
+    }
+
+    [TestMethod]
     public async Task LogoutCommand_Success_ClearsProfile()
     {
         var profile = Profile();
@@ -260,6 +397,9 @@ public sealed class AccountViewModelTests
             init;
         }
 
+        public Func<string, string, CancellationToken, Task<UserProfile>>?
+            RefreshTokenLoginHandler { get; init; }
+
         public Func<CancellationToken, Task>? LogoutHandler { get; init; }
 
         public UserProfile? CurrentUser { get; private set; }
@@ -268,11 +408,17 @@ public sealed class AccountViewModelTests
 
         public int LoginCount { get; private set; }
 
+        public int RefreshTokenLoginCount { get; private set; }
+
         public int LogoutCount { get; private set; }
 
         public string? LoginEmail { get; private set; }
 
         public string? LoginPassword { get; private set; }
+
+        public string? LoginRefreshToken { get; private set; }
+
+        public string? LoginDeviceId { get; private set; }
 
         public CancellationToken RestoreCancellationToken { get; private set; }
 
@@ -300,13 +446,22 @@ public sealed class AccountViewModelTests
             return profile;
         }
 
-        public Task<UserProfile> LoginWithRefreshTokenAsync(
+        public async Task<UserProfile> LoginWithRefreshTokenAsync(
             string refreshToken,
             string deviceId,
             CancellationToken cancellationToken)
         {
-            throw new AssertFailedException(
-                "LoginWithRefreshTokenAsync was not expected.");
+            RefreshTokenLoginCount++;
+            LoginRefreshToken = refreshToken;
+            LoginDeviceId = deviceId;
+            var profile = await (RefreshTokenLoginHandler?.Invoke(
+                refreshToken,
+                deviceId,
+                cancellationToken)
+                ?? throw new AssertFailedException(
+                    "LoginWithRefreshTokenAsync was not expected."));
+            CurrentUser = profile;
+            return profile;
         }
 
         public async Task LogoutAsync(CancellationToken cancellationToken)

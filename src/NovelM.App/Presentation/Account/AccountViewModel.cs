@@ -19,6 +19,12 @@ public partial class AccountViewModel : ObservableObject
     public partial string Password { get; set; }
 
     [ObservableProperty]
+    public partial string RefreshToken { get; set; }
+
+    [ObservableProperty]
+    public partial string DeviceId { get; set; }
+
+    [ObservableProperty]
     public partial bool IsBusy { get; set; }
 
     [ObservableProperty]
@@ -38,6 +44,8 @@ public partial class AccountViewModel : ObservableObject
         _errorMessageMapper = errorMessageMapper;
         Email = string.Empty;
         Password = string.Empty;
+        RefreshToken = string.Empty;
+        DeviceId = string.Empty;
     }
 
     public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
@@ -96,6 +104,39 @@ public partial class AccountViewModel : ObservableObject
         finally
         {
             Password = string.Empty;
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand(AllowConcurrentExecutions = false)]
+    private async Task LoginWithRefreshTokenAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ErrorMessage = null;
+        CurrentUser = null;
+        try
+        {
+            var normalizedRefreshToken =
+                ImportedCredentialValidator.NormalizeRefreshToken(RefreshToken);
+            var normalizedDeviceId =
+                ImportedCredentialValidator.NormalizeDeviceId(DeviceId);
+            CurrentUser = await _authService.LoginWithRefreshTokenAsync(
+                normalizedRefreshToken,
+                normalizedDeviceId,
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            ErrorMessage = _errorMessageMapper.Map(exception);
+        }
+        finally
+        {
+            RefreshToken = string.Empty;
             IsBusy = false;
         }
     }
