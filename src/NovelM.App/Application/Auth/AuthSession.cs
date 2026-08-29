@@ -37,6 +37,23 @@ public sealed class AuthSession : IAuthSession
         }
     }
 
+    public async Task ImportRefreshTokenAsync(
+        string refreshToken,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            await _tokenStore.SaveAsync(refreshToken, cancellationToken);
+            Volatile.Write(ref _sessionToken, null);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<string?> GetAccessTokenAsync(
         CancellationToken cancellationToken)
     {

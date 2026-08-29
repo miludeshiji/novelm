@@ -177,6 +177,14 @@ public sealed class SettingsViewModelTests
             throw new AssertFailedException("SetTokensAsync was not expected.");
         }
 
+        public Task ImportRefreshTokenAsync(
+            string refreshToken,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException(
+                "ImportRefreshTokenAsync was not expected.");
+        }
+
         public Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
         {
             throw new AssertFailedException("GetAccessTokenAsync was not expected.");

@@ -660,6 +660,18 @@ public sealed class AuthServiceTests
             return Task.CompletedTask;
         }
 
+        public Task ImportRefreshTokenAsync(
+            string refreshToken,
+            CancellationToken cancellationToken)
+        {
+            _operations.Add(new Operation(
+                "import-refresh-token",
+                refreshToken,
+                null,
+                cancellationToken));
+            return Task.CompletedTask;
+        }
+
         public Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
         {
             _operations.Add(new Operation(

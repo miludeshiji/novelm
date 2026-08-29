@@ -185,6 +185,50 @@ public sealed class AuthSessionTests
     }
 
     [TestMethod]
+    public async Task ImportRefreshTokenAsync_SavesBeforeClearingSessionToken()
+    {
+        var store = new FakeTokenStore();
+        var session = new AuthSession(new FakeAuthApi(), store);
+        await session.SetTokensAsync(
+            new LoginTokens("existing-session", "existing-refresh"),
+            CancellationToken.None);
+        store.OnSaveAsync = (value, _) =>
+        {
+            Assert.AreEqual("imported-refresh", value);
+            Assert.AreEqual("existing-session", session.SessionToken);
+            return Task.CompletedTask;
+        };
+
+        await session.ImportRefreshTokenAsync(
+            "imported-refresh",
+            CancellationToken.None);
+
+        Assert.AreEqual("imported-refresh", store.StoredToken);
+        Assert.IsNull(session.SessionToken);
+    }
+
+    [TestMethod]
+    public async Task ImportRefreshTokenAsync_SaveFailurePreservesExistingSession()
+    {
+        var store = new FakeTokenStore();
+        var session = new AuthSession(new FakeAuthApi(), store);
+        await session.SetTokensAsync(
+            new LoginTokens("existing-session", "existing-refresh"),
+            CancellationToken.None);
+        var failure = Error(AppErrorKind.Storage);
+        store.SaveException = failure;
+
+        var actual = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            session.ImportRefreshTokenAsync(
+                "imported-refresh",
+                CancellationToken.None));
+
+        Assert.AreSame(failure, actual);
+        Assert.AreEqual("existing-session", session.SessionToken);
+        Assert.AreEqual("existing-refresh", store.StoredToken);
+    }
+
+    [TestMethod]
     [DataRow(null)]
     [DataRow("")]
     [DataRow("   ")]

@@ -8,6 +8,10 @@ public interface IAuthSession
 
     Task SetTokensAsync(LoginTokens tokens, CancellationToken cancellationToken);
 
+    Task ImportRefreshTokenAsync(
+        string refreshToken,
+        CancellationToken cancellationToken);
+
     Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken);
 
     void InvalidateSessionToken();

@@ -1167,6 +1167,14 @@ public sealed class SignalRConnectionTests
             return Task.CompletedTask;
         }
 
+        public Task ImportRefreshTokenAsync(
+            string refreshToken,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException(
+                "ImportRefreshTokenAsync was not expected.");
+        }
+
         public async Task<string?> GetAccessTokenAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
