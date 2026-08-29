@@ -28,6 +28,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="..\..\src\NovelM.App\Presentation\Account\AccountPage.xaml"
+             Link="TestSources\AccountPage.xaml"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\NovelM.App\MainWindow.xaml"
+             Link="TestSources\MainWindow.xaml"
+             CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\NovelM.App\Presentation\Publishing\PublishingPage.xaml"
              Link="TestSources\PublishingPage.xaml"
              CopyToOutputDirectory="PreserveNewest" />

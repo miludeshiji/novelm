@@ -24,22 +24,51 @@
                 Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
                 Severity="Error" />
 
-            <StackPanel
-                Spacing="12"
+            <Pivot
+                x:Name="LoginMethodPivot"
+                SelectedIndex="0"
                 Visibility="{x:Bind ViewModel.IsSignedOut, Mode=OneWay}">
-                <TextBox
-                    Header="邮箱"
-                    PlaceholderText="reader@example.com"
-                    Text="{x:Bind ViewModel.Email, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                <PasswordBox
-                    x:Name="PasswordInput"
-                    Header="密码"
-                    PasswordChanged="PasswordInput_PasswordChanged" />
-                <Button
-                    Command="{x:Bind ViewModel.LoginCommand}"
-                    Content="登录"
-                    Style="{ThemeResource AccentButtonStyle}" />
-            </StackPanel>
+                <PivotItem Header="账号密码">
+                    <StackPanel Padding="0,12,0,0" Spacing="12">
+                        <TextBox
+                            Header="邮箱"
+                            PlaceholderText="reader@example.com"
+                            Text="{x:Bind ViewModel.Email, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <PasswordBox
+                            x:Name="PasswordInput"
+                            Header="密码"
+                            PasswordChanged="PasswordInput_PasswordChanged" />
+                        <Button
+                            Command="{x:Bind ViewModel.LoginCommand}"
+                            Content="登录"
+                            Style="{ThemeResource AccentButtonStyle}" />
+                    </StackPanel>
+                </PivotItem>
+                <PivotItem Header="RefreshToken">
+                    <StackPanel Padding="0,12,0,0" Spacing="12">
+                        <PasswordBox
+                            x:Name="RefreshTokenInput"
+                            Header="RefreshToken"
+                            PasswordChanged="RefreshTokenInput_PasswordChanged"
+                            PasswordRevealMode="Peek" />
+                        <TextBox
+                            x:Name="DeviceIdInput"
+                            Header="x-id"
+                            PlaceholderText="从 Web 客户端复制 x-id"
+                            Text="{x:Bind ViewModel.DeviceId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock
+                            x:Name="CredentialReplacementNotice"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="登录时会替换本机保存的 x-id 和 RefreshToken。"
+                            TextWrapping="Wrap" />
+                        <Button
+                            x:Name="RefreshTokenLoginButton"
+                            Command="{x:Bind ViewModel.LoginWithRefreshTokenCommand}"
+                            Content="Token 登录"
+                            Style="{ThemeResource AccentButtonStyle}" />
+                    </StackPanel>
+                </PivotItem>
+            </Pivot>
 
             <Border
                 Padding="20"

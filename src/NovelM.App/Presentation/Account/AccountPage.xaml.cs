@@ -21,6 +21,7 @@ public sealed partial class AccountPage : Page
     {
         ViewModel.PropertyChanged += ViewModel_PropertyChanged;
         UpdatePassword();
+        UpdateRefreshToken();
         UpdateAvatar();
     }
 
@@ -28,7 +29,9 @@ public sealed partial class AccountPage : Page
     {
         ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
         PasswordInput.Password = string.Empty;
+        RefreshTokenInput.Password = string.Empty;
         ViewModel.Password = string.Empty;
+        ViewModel.RefreshToken = string.Empty;
     }
 
     private void PasswordInput_PasswordChanged(
@@ -44,6 +47,19 @@ public sealed partial class AccountPage : Page
         }
     }
 
+    private void RefreshTokenInput_PasswordChanged(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (!string.Equals(
+            ViewModel.RefreshToken,
+            RefreshTokenInput.Password,
+            StringComparison.Ordinal))
+        {
+            ViewModel.RefreshToken = RefreshTokenInput.Password;
+        }
+    }
+
     private void ViewModel_PropertyChanged(
         object? sender,
         PropertyChangedEventArgs args)
@@ -51,6 +67,10 @@ public sealed partial class AccountPage : Page
         if (args.PropertyName == nameof(AccountViewModel.Password))
         {
             UpdatePassword();
+        }
+        else if (args.PropertyName == nameof(AccountViewModel.RefreshToken))
+        {
+            UpdateRefreshToken();
         }
         else if (args.PropertyName == nameof(AccountViewModel.CurrentUser))
         {
@@ -64,6 +84,15 @@ public sealed partial class AccountPage : Page
             && PasswordInput.Password.Length != 0)
         {
             PasswordInput.Password = string.Empty;
+        }
+    }
+
+    private void UpdateRefreshToken()
+    {
+        if (string.IsNullOrEmpty(ViewModel.RefreshToken)
+            && RefreshTokenInput.Password.Length != 0)
+        {
+            RefreshTokenInput.Password = string.Empty;
         }
     }
 
