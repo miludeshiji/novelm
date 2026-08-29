@@ -141,7 +141,7 @@ public partial class App : Microsoft.UI.Xaml.Application
 
         _window = new Window
         {
-            Title = "轻书架",
+            Title = "NovelM",
             Content = root
         };
         _window.Activate();
@@ -150,7 +150,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         var dialog = new ContentDialog
         {
             XamlRoot = root.XamlRoot,
-            Title = "无法启动轻书架",
+            Title = "无法启动 NovelM",
             Content = $"启动阶段：{startupStage}\n应用数据目录：\n{dataDirectory}",
             CloseButtonText = "关闭"
         };

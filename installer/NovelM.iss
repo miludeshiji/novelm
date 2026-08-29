@@ -7,7 +7,7 @@
 
 [Setup]
 AppId={{7F45FC28-AE14-4D8A-B594-3C01C86BF53D}
-AppName=轻书架
+AppName=NovelM
 AppVersion={#MyAppVersion}
 DefaultDirName={localappdata}\Programs\NovelM
 PrivilegesRequired=lowest
@@ -26,7 +26,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdi
 Source: "..\src\NovelM.App\Assets\AppIcon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\轻书架"; Filename: "{app}\NovelM.exe"
+Name: "{autoprograms}\NovelM"; Filename: "{app}\NovelM.exe"
 
 [Code]
 procedure AddMissing(var Missing: string; const Item, Url: string);

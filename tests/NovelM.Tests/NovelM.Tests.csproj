@@ -40,6 +40,12 @@
     <Content Include="..\..\src\NovelM.App\Presentation\Publishing\PublishingPage.xaml.cs"
              Link="TestSources\PublishingPage.xaml.cs"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\NovelM.App\App.xaml.cs"
+             Link="TestSources\App.xaml.cs"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\installer\NovelM.iss"
+             Link="TestSources\NovelM.iss"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
