@@ -7,6 +7,7 @@ using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Errors;
 using NovelM_App.Infrastructure.Configuration;
 using NovelM_App.Infrastructure.Http;
+using NovelM_App.Infrastructure.Logging;
 using NovelM_App.Infrastructure.Storage;
 
 namespace NovelM.Tests.Infrastructure;
@@ -50,6 +51,77 @@ public sealed class ApiHttpClientTests
             request.Body,
             ("email", "reader@example.test"),
             ("password", "already-hashed-password"));
+    }
+
+    [TestMethod]
+    public async Task LoginAsync_WritesSafeCompletionDiagnosticWithoutPayload()
+    {
+        using var fixture = await ApiFixture.CreateAsync(_ => SuccessfulLoginResponse());
+
+        await fixture.Api.LoginAsync(
+            "diagnostic-secret@example.test",
+            "diagnostic-password-secret",
+            CancellationToken.None);
+
+        var log = fixture.Log;
+        Assert.IsNotNull(log);
+        var diagnostic = log.Events.Single(item =>
+            item.EventName == "http.completed");
+        Assert.AreEqual("Login", diagnostic.Fields["operation"]);
+        Assert.AreEqual("api.lightnovel.life", diagnostic.Fields["host"]);
+        Assert.AreEqual(200, diagnostic.Fields["httpStatus"]);
+        Assert.AreEqual(nameof(LoginResponse), diagnostic.Fields["responseType"]);
+        Assert.IsTrue(diagnostic.Fields.ContainsKey("byteLength"));
+        Assert.IsTrue(diagnostic.Fields.ContainsKey("elapsedMs"));
+        Assert.IsTrue(diagnostic.Fields.ContainsKey("correlationId"));
+        Assert.IsFalse(diagnostic.Fields.ContainsKey("requestBody"));
+        Assert.IsFalse(diagnostic.Fields.Values.Any(value =>
+            Equals(value, "diagnostic-secret@example.test")
+            || Equals(value, "diagnostic-password-secret")));
+        Assert.IsNull(diagnostic.Exception);
+    }
+
+    [TestMethod]
+    public async Task LoginAsync_ProtocolFailureWritesSafeFailureDiagnostic()
+    {
+        const string responseSecret = "response-body-secret";
+        using var fixture = await ApiFixture.CreateAsync(_ => JsonResponse(
+            $$"""{"success":true,"response":"{{responseSecret}}"""));
+
+        var exception = await Assert.ThrowsExactlyAsync<AppException>(() =>
+            fixture.Api.LoginAsync(
+                "request-secret@example.test",
+                "request-password-secret",
+                CancellationToken.None));
+
+        var log = fixture.Log;
+        Assert.IsNotNull(log);
+        var diagnostic = log.Events.Single(item =>
+            item.EventName == "http.failed");
+        Assert.AreSame(exception, diagnostic.Exception);
+        Assert.AreEqual("Protocol", diagnostic.Fields["errorKind"]);
+        Assert.AreEqual(200, diagnostic.Fields["httpStatus"]);
+        Assert.IsTrue(diagnostic.Fields.ContainsKey("byteLength"));
+        Assert.IsFalse(diagnostic.Fields.Values.Any(value =>
+            Equals(value, responseSecret)
+            || Equals(value, "request-secret@example.test")
+            || Equals(value, "request-password-secret")));
+    }
+
+    [TestMethod]
+    public async Task LoginAsync_WhenDiagnosticLogThrows_PreservesSuccessfulResult()
+    {
+        using var fixture = await ApiFixture.CreateAsync(
+            new LocalApiHandler(_ => SuccessfulLoginResponse()),
+            new ThrowingDiagnosticLog());
+
+        var result = await fixture.Api.LoginAsync(
+            "reader@example.test",
+            "hash",
+            CancellationToken.None);
+
+        Assert.AreEqual("session-token", result.SessionToken);
+        Assert.AreEqual("refresh-token", result.RefreshToken);
     }
 
     [TestMethod]
@@ -527,7 +599,8 @@ public sealed class ApiHttpClientTests
             AppPaths paths,
             ApiServerManager serverManager,
             DeviceIdStore deviceIdStore,
-            LocalApiHandler handler)
+            LocalApiHandler handler,
+            IDiagnosticLog diagnosticLog)
         {
             _temporaryDirectory = temporaryDirectory;
             Paths = paths;
@@ -535,7 +608,12 @@ public sealed class ApiHttpClientTests
             DeviceIdStore = deviceIdStore;
             Handler = handler;
             HttpClient = new HttpClient(handler);
-            Api = new AuthApi(new ApiHttpClient(HttpClient, serverManager, deviceIdStore));
+            Log = diagnosticLog as RecordingDiagnosticLog;
+            Api = new AuthApi(new ApiHttpClient(
+                HttpClient,
+                serverManager,
+                deviceIdStore,
+                diagnosticLog));
         }
 
         public IAuthApi Api { get; }
@@ -550,13 +628,17 @@ public sealed class ApiHttpClientTests
 
         public HttpClient HttpClient { get; }
 
+        public RecordingDiagnosticLog? Log { get; }
+
         public static Task<ApiFixture> CreateAsync(
             Func<int, HttpResponseMessage> responseFactory)
         {
             return CreateAsync(new LocalApiHandler(responseFactory));
         }
 
-        public static async Task<ApiFixture> CreateAsync(LocalApiHandler handler)
+        public static async Task<ApiFixture> CreateAsync(
+            LocalApiHandler handler,
+            IDiagnosticLog? diagnosticLog = null)
         {
             var temporaryDirectory = new TemporaryDirectory();
 
@@ -570,7 +652,8 @@ public sealed class ApiHttpClientTests
                     paths,
                     serverManager,
                     new DeviceIdStore(paths),
-                    handler);
+                    handler,
+                    diagnosticLog ?? new RecordingDiagnosticLog());
             }
             catch
             {
