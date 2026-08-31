@@ -18,17 +18,7 @@ internal sealed class CompressedResponseDecoder
 
     public T Decode<T>(HubEnvelope<byte[]> envelope, string methodName)
     {
-        if (!envelope.Success)
-        {
-            var kind = envelope.Status is -100 or 404
-                ? AppErrorKind.Unauthorized
-                : AppErrorKind.Server;
-
-            throw new AppException(
-                kind,
-                ErrorMessage(envelope.Msg, methodName),
-                envelope.Status);
-        }
+        EnsureSuccessful(envelope, methodName);
 
         if (envelope.Response is null)
         {
@@ -60,6 +50,30 @@ internal sealed class CompressedResponseDecoder
         {
             throw ProtocolError(methodName, "could not be decoded", exception);
         }
+    }
+
+    public void ValidateCommand(HubEnvelope<byte[]> envelope, string methodName)
+    {
+        EnsureSuccessful(envelope, methodName);
+    }
+
+    private static void EnsureSuccessful(
+        HubEnvelope<byte[]> envelope,
+        string methodName)
+    {
+        if (envelope.Success)
+        {
+            return;
+        }
+
+        var kind = envelope.Status is -100 or 404
+            ? AppErrorKind.Unauthorized
+            : AppErrorKind.Server;
+
+        throw new AppException(
+            kind,
+            ErrorMessage(envelope.Msg, methodName),
+            envelope.Status);
     }
 
     private static string ErrorMessage(string? message, string methodName)

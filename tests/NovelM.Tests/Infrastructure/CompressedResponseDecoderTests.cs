@@ -75,6 +75,55 @@ public sealed class CompressedResponseDecoderTests
     }
 
     [TestMethod]
+    public void ValidateCommand_SuccessfulNullResponse_DoesNotThrow()
+    {
+        var envelope = new HubEnvelope<byte[]>
+        {
+            Success = true,
+            Status = 200,
+            Response = null
+        };
+
+        _decoder.ValidateCommand(envelope, "UpdateBook");
+    }
+
+    [TestMethod]
+    public void ValidateCommand_SuccessfulInvalidPayload_DoesNotInspectPayload()
+    {
+        var envelope = new HubEnvelope<byte[]>
+        {
+            Success = true,
+            Status = 200,
+            Response = Encoding.UTF8.GetBytes("not-gzip-and-not-json")
+        };
+
+        _decoder.ValidateCommand(envelope, "UpdateBook");
+    }
+
+    [TestMethod]
+    [DataRow(-100, AppErrorKind.Unauthorized)]
+    [DataRow(404, AppErrorKind.Unauthorized)]
+    [DataRow(403, AppErrorKind.Server)]
+    public void ValidateCommand_FailedEnvelope_PreservesClassification(
+        int status,
+        AppErrorKind expectedKind)
+    {
+        var envelope = new HubEnvelope<byte[]>
+        {
+            Success = false,
+            Status = status,
+            Msg = "Synthetic command failure"
+        };
+
+        var exception = Assert.ThrowsExactly<AppException>(
+            () => _decoder.ValidateCommand(envelope, "UpdateBook"));
+
+        Assert.AreEqual(expectedKind, exception.Kind);
+        Assert.AreEqual(status, exception.Status);
+        Assert.AreEqual("Synthetic command failure", exception.Message);
+    }
+
+    [TestMethod]
     public void Decode_InvalidGzip_ThrowsSafeProtocolErrorWithMethodName()
     {
         const string payloadContent = "secret-compressed-payload";
