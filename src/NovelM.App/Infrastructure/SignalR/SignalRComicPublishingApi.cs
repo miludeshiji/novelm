@@ -1,4 +1,3 @@
-using System.Text.Json;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Common;
 using NovelM_App.Domain.Errors;
@@ -65,7 +64,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         long bookId,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.DeleteBook,
             new { Id = bookId },
             cancellationToken);
@@ -123,7 +122,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         ComicInfoDraft draft,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.UpdateBook,
             new
             {
@@ -145,7 +144,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         ComicSettingsDraft draft,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.UpdateBook,
             new
             {
@@ -188,7 +187,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         ComicChapterDraft draft,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.UpdateComicChapter,
             new
             {
@@ -226,7 +225,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         int sortNum,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.DeleteChapter,
             new { Bid = bookId, SortNum = sortNum },
             cancellationToken);
@@ -238,7 +237,7 @@ internal sealed class SignalRComicPublishingApi : IComicPublishingApi
         int newSortNum,
         CancellationToken cancellationToken)
     {
-        _ = await _connection.InvokeAsync<JsonElement?>(
+        await _connection.InvokeCommandAsync(
             HubMethodNames.ReorderChapter,
             new
             {

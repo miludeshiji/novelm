@@ -117,7 +117,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "DeleteBook",
             """{"Id":77}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -193,7 +193,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "UpdateBook",
             """{"Id":77,"Map":{"Cover":"new-cover.png","Title":"New title","Author":"New author","Introduction":"New introduction","CategoryId":9}}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -221,7 +221,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "UpdateBook",
             """{"Id":77,"Map":{"Level":4,"InteriorLevel":3,"DownloadAllowed":false,"SubjectId":null,"SeriesId":null,"SeriesName":"Series","SeriesNameCn":"系列","Tags":["奇幻","治愈"]}}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -268,7 +268,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "UpdateComicChapter",
             """{"Cid":701,"Map":{"Title":"Updated","Images":["1.png","2.png"]}}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -333,7 +333,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "DeleteChapter",
             """{"Bid":77,"SortNum":3}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -350,7 +350,7 @@ public sealed class SignalRComicPublishingApiTests
             connection,
             "ReorderChapter",
             """{"BookId":77,"OldSortNum":3,"NewSortNum":1}""",
-            typeof(JsonElement?),
+            null,
             cancellation.Token);
     }
 
@@ -737,8 +737,7 @@ public sealed class SignalRComicPublishingApiTests
 
     private static RecordingSignalRConnection VoidConnection()
     {
-        using var document = JsonDocument.Parse("""{"Ignored":true}""");
-        return new RecordingSignalRConnection(document.RootElement.Clone());
+        return new RecordingSignalRConnection(response: null);
     }
 
     private static T Decode<T>(string json, string methodName)
@@ -756,7 +755,7 @@ public sealed class SignalRComicPublishingApiTests
         RecordingSignalRConnection connection,
         string expectedMethodName,
         string expectedPayload,
-        Type expectedResponseType,
+        Type? expectedResponseType,
         CancellationToken expectedCancellationToken)
     {
         Assert.AreEqual(1, connection.Calls.Count);
@@ -781,7 +780,7 @@ public sealed class SignalRComicPublishingApiTests
         string MethodName,
         object? Request,
         CancellationToken CancellationToken,
-        Type ResponseType);
+        Type? ResponseType);
 
     private sealed class RecordingSignalRConnection : ISignalRConnection
     {
@@ -848,7 +847,12 @@ public sealed class SignalRComicPublishingApiTests
             object? request,
             CancellationToken cancellationToken)
         {
-            throw new AssertFailedException("InvokeCommandAsync was not expected.");
+            Calls.Add(new Invocation(
+                methodName,
+                request,
+                cancellationToken,
+                ResponseType: null));
+            return Task.CompletedTask;
         }
     }
 }
