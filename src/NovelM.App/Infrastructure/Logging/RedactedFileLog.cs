@@ -7,7 +7,6 @@ internal sealed class RedactedFileLog : IDiagnosticLog
 {
     private const long DefaultMaximumBytes = 1024 * 1024;
     private const int DefaultHistoryCount = 2;
-    private static readonly byte[] NewLine = [(byte)'\n'];
     private static readonly HashSet<string> AllowedFields = new(
         StringComparer.Ordinal)
     {
@@ -69,12 +68,15 @@ internal sealed class RedactedFileLog : IDiagnosticLog
                 NormalizeEventName(eventName),
                 FilterFields(safeFields),
                 Snapshot(exception, depth: 0));
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
+            var jsonBytes = JsonSerializer.SerializeToUtf8Bytes(entry, JsonOptions);
+            var lineBytes = new byte[jsonBytes.Length + 1];
+            jsonBytes.CopyTo(lineBytes, 0);
+            lineBytes[^1] = (byte)'\n';
 
             await _writeGate.WaitAsync(cancellationToken);
             gateEntered = true;
             Directory.CreateDirectory(_logDirectory);
-            RotateIfRequired(bytes.Length + NewLine.Length);
+            RotateIfRequired(lineBytes.Length);
 
             await using var stream = new FileStream(
                 _currentFile,
@@ -83,9 +85,8 @@ internal sealed class RedactedFileLog : IDiagnosticLog
                 FileShare.Read,
                 bufferSize: 4096,
                 FileOptions.Asynchronous);
-            await stream.WriteAsync(bytes, cancellationToken);
-            await stream.WriteAsync(NewLine, cancellationToken);
-            await stream.FlushAsync(cancellationToken);
+            await stream.WriteAsync(lineBytes, CancellationToken.None);
+            await stream.FlushAsync(CancellationToken.None);
         }
         catch
         {

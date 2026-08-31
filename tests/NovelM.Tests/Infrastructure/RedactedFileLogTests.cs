@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using NovelM.Tests.TestSupport;
 using NovelM_App.Infrastructure.Logging;
@@ -83,6 +84,55 @@ public sealed class RedactedFileLogTests
     }
 
     [TestMethod]
+    public async Task WriteAsync_CancellationAfterGateAcquisition_PreservesJsonLineBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var logger = new RedactedFileLog(directory.Path, 1024 * 1024, 2);
+        var gate = GetWriteGate(logger);
+        await gate.WaitAsync();
+        using var cancellation = new CancellationTokenSource();
+        var cancellationContext = new CancelOnPostSynchronizationContext(cancellation);
+        var previousContext = SynchronizationContext.Current;
+        Task firstWrite;
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(cancellationContext);
+            firstWrite = logger.WriteAsync(
+                "boundary.before",
+                new Dictionary<string, object?> { ["stage"] = "before" },
+                exception: null,
+                cancellation.Token);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+
+        Assert.IsFalse(firstWrite.IsCompleted);
+        gate.Release();
+
+        await firstWrite.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        await logger.WriteAsync(
+            "boundary.after",
+            new Dictionary<string, object?> { ["stage"] = "after" },
+            exception: null,
+            CancellationToken.None);
+
+        var lines = await File.ReadAllLinesAsync(Path.Combine(directory.Path, "app.log"));
+        Assert.HasCount(2, lines);
+        var eventNames = lines.Select(line =>
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("eventName").GetString();
+        }).ToArray();
+        CollectionAssert.AreEqual(
+            new[] { "boundary.before", "boundary.after" },
+            eventNames);
+    }
+
+    [TestMethod]
     public async Task WriteAsync_WhenLimitIsExceeded_RetainsCurrentAndTwoHistoryFiles()
     {
         using var directory = new TemporaryDirectory();
@@ -121,5 +171,32 @@ public sealed class RedactedFileLogTests
             new Dictionary<string, object?> { ["stage"] = "write" },
             new IOException("synthetic failure"),
             CancellationToken.None);
+    }
+
+    private static SemaphoreSlim GetWriteGate(RedactedFileLog logger)
+    {
+        var field = typeof(RedactedFileLog).GetField(
+            "_writeGate",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.IsNotNull(field);
+        var gate = field.GetValue(logger) as SemaphoreSlim;
+        Assert.IsNotNull(gate);
+        return gate;
+    }
+
+    private sealed class CancelOnPostSynchronizationContext(
+        CancellationTokenSource cancellation) : SynchronizationContext
+    {
+        private int _hasCancelled;
+
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            if (Interlocked.Exchange(ref _hasCancelled, 1) == 0)
+            {
+                cancellation.Cancel();
+            }
+
+            ThreadPool.QueueUserWorkItem(_ => callback(state));
+        }
     }
 }
