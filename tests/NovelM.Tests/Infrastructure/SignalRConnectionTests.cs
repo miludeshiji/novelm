@@ -9,6 +9,7 @@ using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Configuration;
 using NovelM_App.Domain.Connection;
 using NovelM_App.Domain.Errors;
+using NovelM_App.Infrastructure.Logging;
 using NovelM_App.Infrastructure.SignalR;
 using SignalRRetryContext = Microsoft.AspNetCore.SignalR.Client.RetryContext;
 
@@ -89,6 +90,74 @@ public sealed class SignalRConnectionTests
             var request = invocation.Request as LocalUpdateBookRequest;
             Assert.IsNotNull(request);
             Assert.AreEqual(77L, request.Id);
+        }
+        finally
+        {
+            await StopAsync(connection);
+        }
+    }
+
+    [TestMethod]
+    public async Task InvokeCommandAsync_WritesSafeEnvelopeAndCompletionDiagnostics()
+    {
+        await using var host = await LocalSignalRHost.StartAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        var log = new RecordingDiagnosticLog();
+        var connection = CreateConnection(
+            host,
+            new FakeAuthSession("diagnostic-token"),
+            diagnosticLog: log);
+
+        try
+        {
+            await connection.InvokeCommandAsync(
+                HubMethodNames.UpdateBook,
+                new LocalUpdateBookRequest { Id = 77 },
+                CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+            var envelope = log.Events.Single(item =>
+                item.EventName == "signalr.response");
+            Assert.AreEqual(HubMethodNames.UpdateBook, envelope.Fields["hubMethod"]);
+            Assert.AreEqual("command", envelope.Fields["responseType"]);
+            Assert.AreEqual(0, envelope.Fields["byteLength"]);
+            Assert.AreEqual(200, envelope.Fields["serverStatus"]);
+            Assert.IsTrue(envelope.Fields.ContainsKey("correlationId"));
+
+            var completed = log.Events.Single(item =>
+                item.EventName == "signalr.completed");
+            Assert.AreEqual(HubMethodNames.UpdateBook, completed.Fields["hubMethod"]);
+            Assert.IsTrue(completed.Fields.ContainsKey("elapsedMs"));
+            Assert.AreEqual(
+                envelope.Fields["correlationId"],
+                completed.Fields["correlationId"]);
+            Assert.IsFalse(log.Events
+                .SelectMany(item => item.Fields.Values)
+                .Any(value => Equals(value, "diagnostic-token")));
+        }
+        finally
+        {
+            await StopAsync(connection);
+        }
+    }
+
+    [TestMethod]
+    public async Task InvokeAsync_WhenDiagnosticLogThrows_PreservesSuccessfulResult()
+    {
+        await using var host = await LocalSignalRHost.StartAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        var connection = CreateConnection(
+            host,
+            new FakeAuthSession("logger-failure-token"),
+            diagnosticLog: new ThrowingDiagnosticLog());
+
+        try
+        {
+            var result = await connection.InvokeAsync<UserProfileDto>(
+                HubMethodNames.GetMyInfo,
+                null,
+                CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual("reader", result.UserName);
         }
         finally
         {
@@ -1015,28 +1084,36 @@ public sealed class SignalRConnectionTests
 
     private static SignalRConnection CreateConnection(
         LocalSignalRHost host,
-        FakeAuthSession authSession)
+        FakeAuthSession authSession,
+        IDiagnosticLog? diagnosticLog = null)
     {
-        return CreateConnection(host.BaseUri, authSession);
+        return CreateConnection(
+            host.BaseUri,
+            authSession,
+            diagnosticLog: diagnosticLog);
     }
 
     private static SignalRConnection CreateConnection(
         Uri baseUri,
         FakeAuthSession authSession,
-        Func<TimeSpan, CancellationToken, Task>? retryDelayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? retryDelayAsync = null,
+        IDiagnosticLog? diagnosticLog = null)
     {
         var serverManager = new FakeApiServerManager(baseUri);
+        var actualLog = diagnosticLog ?? NullDiagnosticLog.Instance;
         return retryDelayAsync is null
             ? new SignalRConnection(
                 serverManager,
                 authSession,
                 new CompressedResponseDecoder(),
-                new SignalRRetryPolicy())
+                new SignalRRetryPolicy(),
+                actualLog)
             : new SignalRConnection(
                 serverManager,
                 authSession,
                 new CompressedResponseDecoder(),
                 new SignalRRetryPolicy(),
+                actualLog,
                 retryDelayAsync);
     }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -6,6 +7,7 @@ using MessagePack.Resolvers;
 using NovelM_App.Application.Abstractions;
 using NovelM_App.Domain.Connection;
 using NovelM_App.Domain.Errors;
+using NovelM_App.Infrastructure.Logging;
 
 namespace NovelM_App.Infrastructure.SignalR;
 
@@ -17,6 +19,7 @@ internal sealed class SignalRConnection : ISignalRConnection
     private readonly IAuthSession _authSession;
     private readonly CompressedResponseDecoder _decoder;
     private readonly SignalRRetryPolicy _retryPolicy;
+    private readonly IDiagnosticLog _diagnosticLog;
     private readonly Func<TimeSpan, CancellationToken, Task> _retryDelayAsync;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _stateNotificationLock = new();
@@ -30,8 +33,15 @@ internal sealed class SignalRConnection : ISignalRConnection
         IApiServerManager serverManager,
         IAuthSession authSession,
         CompressedResponseDecoder decoder,
-        SignalRRetryPolicy retryPolicy)
-        : this(serverManager, authSession, decoder, retryPolicy, Task.Delay)
+        SignalRRetryPolicy retryPolicy,
+        IDiagnosticLog diagnosticLog)
+        : this(
+            serverManager,
+            authSession,
+            decoder,
+            retryPolicy,
+            diagnosticLog,
+            Task.Delay)
     {
     }
 
@@ -40,12 +50,14 @@ internal sealed class SignalRConnection : ISignalRConnection
         IAuthSession authSession,
         CompressedResponseDecoder decoder,
         SignalRRetryPolicy retryPolicy,
+        IDiagnosticLog diagnosticLog,
         Func<TimeSpan, CancellationToken, Task> retryDelayAsync)
     {
         _serverManager = serverManager;
         _authSession = authSession;
         _decoder = decoder;
         _retryPolicy = retryPolicy;
+        _diagnosticLog = diagnosticLog;
         _retryDelayAsync = retryDelayAsync;
     }
 
@@ -146,14 +158,47 @@ internal sealed class SignalRConnection : ISignalRConnection
         }
     }
 
-    public Task<T> InvokeAsync<T>(
+    public async Task<T> InvokeAsync<T>(
         string methodName,
         object? request,
         CancellationToken cancellationToken)
     {
-        return InvokeWithUnauthorizedRetryAsync(
-            () => InvokeCoreAsync<T>(methodName, request, cancellationToken),
-            cancellationToken);
+        var correlationId = Guid.NewGuid().ToString("N");
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var result = await InvokeWithUnauthorizedRetryAsync(
+                () => InvokeCoreAsync<T>(
+                    methodName,
+                    request,
+                    correlationId,
+                    cancellationToken),
+                cancellationToken);
+            await WriteInvocationDiagnosticAsync(
+                "signalr.completed",
+                methodName,
+                typeof(T).Name,
+                stopwatch.ElapsedMilliseconds,
+                correlationId,
+                exception: null);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await WriteInvocationDiagnosticAsync(
+                "signalr.failed",
+                methodName,
+                typeof(T).Name,
+                stopwatch.ElapsedMilliseconds,
+                correlationId,
+                exception);
+            throw;
+        }
     }
 
     public async Task InvokeCommandAsync(
@@ -161,13 +206,45 @@ internal sealed class SignalRConnection : ISignalRConnection
         object? request,
         CancellationToken cancellationToken)
     {
-        _ = await InvokeWithUnauthorizedRetryAsync(
-            async () =>
-            {
-                await InvokeCommandCoreAsync(methodName, request, cancellationToken);
-                return true;
-            },
-            cancellationToken);
+        var correlationId = Guid.NewGuid().ToString("N");
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            _ = await InvokeWithUnauthorizedRetryAsync(
+                async () =>
+                {
+                    await InvokeCommandCoreAsync(
+                        methodName,
+                        request,
+                        correlationId,
+                        cancellationToken);
+                    return true;
+                },
+                cancellationToken);
+            await WriteInvocationDiagnosticAsync(
+                "signalr.completed",
+                methodName,
+                "command",
+                stopwatch.ElapsedMilliseconds,
+                correlationId,
+                exception: null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await WriteInvocationDiagnosticAsync(
+                "signalr.failed",
+                methodName,
+                "command",
+                stopwatch.ElapsedMilliseconds,
+                correlationId,
+                exception);
+            throw;
+        }
     }
 
     private async Task<T> InvokeWithUnauthorizedRetryAsync<T>(
@@ -229,7 +306,7 @@ internal sealed class SignalRConnection : ISignalRConnection
             await hub.StartAsync(cancellationToken);
             PublishStateIfActiveHub(hub, ConnectionState.Connected);
         }
-        catch
+        catch (Exception exception)
         {
             var wasActive = ClearActiveHub(hub);
 
@@ -244,6 +321,23 @@ internal sealed class SignalRConnection : ISignalRConnection
             if (publishFailure && wasActive)
             {
                 PublishState(ConnectionState.Failed);
+            }
+
+            if (exception is not OperationCanceledException)
+            {
+                await _diagnosticLog.TryWriteAsync(
+                    "signalr.connection.failed",
+                    new Dictionary<string, object?>
+                    {
+                        ["host"] = _serverManager.Current.BaseUri.Host,
+                        ["stage"] = startingState.ToString(),
+                        ["connectionState"] = ConnectionState.Failed.ToString(),
+                        ["errorKind"] = exception is AppException appException
+                            ? appException.Kind.ToString()
+                            : exception.GetType().Name
+                    },
+                    exception,
+                    CancellationToken.None);
             }
 
             throw;
@@ -422,11 +516,14 @@ internal sealed class SignalRConnection : ISignalRConnection
     private async Task<T> InvokeCoreAsync<T>(
         string methodName,
         object? request,
+        string correlationId,
         CancellationToken cancellationToken)
     {
         var envelope = await InvokeEnvelopeAsync(
             methodName,
             request,
+            typeof(T).Name,
+            correlationId,
             cancellationToken);
         return _decoder.Decode<T>(envelope, methodName);
     }
@@ -434,11 +531,14 @@ internal sealed class SignalRConnection : ISignalRConnection
     private async Task InvokeCommandCoreAsync(
         string methodName,
         object? request,
+        string correlationId,
         CancellationToken cancellationToken)
     {
         var envelope = await InvokeEnvelopeAsync(
             methodName,
             request,
+            "command",
+            correlationId,
             cancellationToken);
         _decoder.ValidateCommand(envelope, methodName);
     }
@@ -446,16 +546,73 @@ internal sealed class SignalRConnection : ISignalRConnection
     private async Task<HubEnvelope<byte[]>> InvokeEnvelopeAsync(
         string methodName,
         object? request,
+        string responseType,
+        string correlationId,
         CancellationToken cancellationToken)
     {
         var hub = GetActiveHub()
             ?? throw new AppException(
                 AppErrorKind.Transport,
                 "The SignalR connection is not available.");
-        return await hub.InvokeCoreAsync<HubEnvelope<byte[]>>(
+        var envelope = await hub.InvokeCoreAsync<HubEnvelope<byte[]>>(
             methodName,
             new object?[] { request, new { UseGzip = true } },
             cancellationToken);
+        await _diagnosticLog.TryWriteAsync(
+            "signalr.response",
+            new Dictionary<string, object?>
+            {
+                ["host"] = _serverManager.Current.BaseUri.Host,
+                ["hubMethod"] = methodName,
+                ["stage"] = envelope.Success
+                    ? "success-envelope"
+                    : "failed-envelope",
+                ["responseType"] = responseType,
+                ["serverStatus"] = envelope.Status,
+                ["byteLength"] = envelope.Response?.Length ?? 0,
+                ["correlationId"] = correlationId
+            },
+            exception: null,
+            CancellationToken.None);
+        return envelope;
+    }
+
+    private Task WriteInvocationDiagnosticAsync(
+        string eventName,
+        string methodName,
+        string responseType,
+        long elapsedMilliseconds,
+        string correlationId,
+        Exception? exception)
+    {
+        var fields = new Dictionary<string, object?>
+        {
+            ["host"] = _serverManager.Current.BaseUri.Host,
+            ["hubMethod"] = methodName,
+            ["stage"] = eventName == "signalr.completed"
+                ? "completed"
+                : "failed",
+            ["responseType"] = responseType,
+            ["elapsedMs"] = elapsedMilliseconds,
+            ["correlationId"] = correlationId
+        };
+        if (exception is not null)
+        {
+            fields["errorKind"] = exception is AppException appException
+                ? appException.Kind.ToString()
+                : exception.GetType().Name;
+        }
+
+        if (exception is AppException { Status: not null } statusException)
+        {
+            fields["serverStatus"] = statusException.Status.Value;
+        }
+
+        return _diagnosticLog.TryWriteAsync(
+            eventName,
+            fields,
+            exception,
+            CancellationToken.None);
     }
 
     private static bool IsUnauthorized(Exception exception)
@@ -545,6 +702,16 @@ internal sealed class SignalRConnection : ISignalRConnection
         }
 
         Volatile.Write(ref _state, (int)state);
+        _ = _diagnosticLog.TryWriteAsync(
+            "signalr.state.changed",
+            new Dictionary<string, object?>
+            {
+                ["host"] = _serverManager.Current.BaseUri.Host,
+                ["connectionState"] = state.ToString(),
+                ["stage"] = "state-change"
+            },
+            exception: null,
+            CancellationToken.None);
         var handlers = StateChanged;
         if (handlers is null)
         {
