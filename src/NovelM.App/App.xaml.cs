@@ -6,8 +6,10 @@ using NovelM_App.Application.Auth;
 using NovelM_App.Application.Books;
 using NovelM_App.Application.Manga;
 using NovelM_App.Application.Publishing;
+using NovelM_App.Domain.Errors;
 using NovelM_App.Infrastructure.Configuration;
 using NovelM_App.Infrastructure.Http;
+using NovelM_App.Infrastructure.Logging;
 using NovelM_App.Infrastructure.SignalR;
 using NovelM_App.Infrastructure.Storage;
 using NovelM_App.Presentation.Account;
@@ -27,6 +29,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     {
         InitializeComponent();
         Services = BuildServices();
+        UnhandledException += OnUnhandledException;
     }
 
     public static IServiceProvider Services { get; private set; } = null!;
@@ -36,6 +39,7 @@ public partial class App : Microsoft.UI.Xaml.Application
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         var paths = Services.GetRequiredService<AppPaths>();
+        var diagnosticLog = Services.GetRequiredService<IDiagnosticLog>();
         var startupStage = "准备数据目录";
 
         try
@@ -60,12 +64,48 @@ public partial class App : Microsoft.UI.Xaml.Application
                 .GetRequiredService<AccountViewModel>()
                 .RestoreAsync(CancellationToken.None);
         }
-        catch
+        catch (Exception exception)
         {
+            await diagnosticLog.TryWriteAsync(
+                "application.startup.failed",
+                new Dictionary<string, object?>
+                {
+                    ["operation"] = "Startup",
+                    ["stage"] = startupStage,
+                    ["errorKind"] = ErrorKind(exception)
+                },
+                exception,
+                CancellationToken.None);
             await ShowStartupFailureAsync(
                 paths.DataDirectory,
                 startupStage);
         }
+    }
+
+    private static void OnUnhandledException(
+        object sender,
+        Microsoft.UI.Xaml.UnhandledExceptionEventArgs args)
+    {
+        Task.Run(() => Services.GetRequiredService<IDiagnosticLog>()
+                .TryWriteAsync(
+                    "application.unhandled",
+                    new Dictionary<string, object?>
+                    {
+                        ["operation"] = "Application",
+                        ["stage"] = "unhandled",
+                        ["errorKind"] = ErrorKind(args.Exception)
+                    },
+                    args.Exception,
+                    CancellationToken.None))
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static string ErrorKind(Exception exception)
+    {
+        return exception is AppException appException
+            ? appException.Kind.ToString()
+            : exception.GetType().Name;
     }
 
     private static IServiceProvider BuildServices()
@@ -74,6 +114,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         var paths = AppPaths.ForRuntime();
 
         services.AddSingleton(paths);
+        services.AddSingleton<IDiagnosticLog>(provider =>
+            new RedactedFileLog(provider.GetRequiredService<AppPaths>()));
         services.AddSingleton<IDeviceIdStore>(provider =>
             new DeviceIdStore(provider.GetRequiredService<AppPaths>()));
         services.AddSingleton<IApiServerManager>(provider =>
