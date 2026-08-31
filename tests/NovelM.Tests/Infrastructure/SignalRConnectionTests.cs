@@ -70,6 +70,33 @@ public sealed class SignalRConnectionTests
     }
 
     [TestMethod]
+    public async Task InvokeCommandAsync_RealMessagePackHost_AcceptsSuccessfulNullResponse()
+    {
+        await using var host = await LocalSignalRHost.StartAsync()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        var connection = CreateConnection(host, new FakeAuthSession("command-token"));
+
+        try
+        {
+            await connection.InvokeCommandAsync(
+                HubMethodNames.UpdateBook,
+                new LocalUpdateBookRequest { Id = 77 },
+                CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+            var invocation = host.State.Invocations.Single();
+            Assert.AreEqual(HubMethodNames.UpdateBook, invocation.MethodName);
+            Assert.IsTrue(invocation.UseGzip);
+            var request = invocation.Request as LocalUpdateBookRequest;
+            Assert.IsNotNull(request);
+            Assert.AreEqual(77L, request.Id);
+        }
+        finally
+        {
+            await StopAsync(connection);
+        }
+    }
+
+    [TestMethod]
     public async Task InvokeAsync_GetBookInfo_SendsTypedRequestAndDecodesAllDtoFields()
     {
         await using var host = await LocalSignalRHost.StartAsync()

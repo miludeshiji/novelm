@@ -1097,6 +1097,14 @@ public sealed class AuthServiceTests
         {
             throw new AssertFailedException("InvokeAsync was not expected.");
         }
+
+        public Task InvokeCommandAsync(
+            string methodName,
+            object? request,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException("InvokeCommandAsync was not expected.");
+        }
     }
 
     private sealed class FakeUserApi : IUserApi

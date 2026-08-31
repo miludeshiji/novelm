@@ -110,6 +110,19 @@ internal sealed class LocalSignalRHost : IAsyncDisposable
                 """{"Id":11,"UserName":"reader","Avatar":"avatar.png","Role":{"Name":"member"}}""");
         }
 
+        public HubEnvelope<byte[]> UpdateBook(
+            LocalUpdateBookRequest request,
+            LocalGzipOption option)
+        {
+            state.RecordInvocation(nameof(UpdateBook), request, option.UseGzip);
+            return new HubEnvelope<byte[]>
+            {
+                Success = true,
+                Status = 200,
+                Response = null
+            };
+        }
+
         public HubEnvelope<byte[]> GetBookInfo(
             LocalBookInfoRequest request,
             LocalGzipOption option)
@@ -257,6 +270,11 @@ public sealed class LocalGzipOption
 }
 
 public sealed class LocalBookInfoRequest
+{
+    public long Id { get; set; }
+}
+
+public sealed class LocalUpdateBookRequest
 {
     public long Id { get; set; }
 }

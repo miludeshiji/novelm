@@ -842,5 +842,13 @@ public sealed class SignalRComicPublishingApiTests
             throw new AssertFailedException(
                 $"Expected response type '{typeof(T)}', but configured '{_response?.GetType()}'.");
         }
+
+        public Task InvokeCommandAsync(
+            string methodName,
+            object? request,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException("InvokeCommandAsync was not expected.");
+        }
     }
 }

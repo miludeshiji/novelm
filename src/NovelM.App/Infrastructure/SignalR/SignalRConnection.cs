@@ -146,16 +146,39 @@ internal sealed class SignalRConnection : ISignalRConnection
         }
     }
 
-    public async Task<T> InvokeAsync<T>(
+    public Task<T> InvokeAsync<T>(
         string methodName,
         object? request,
+        CancellationToken cancellationToken)
+    {
+        return InvokeWithUnauthorizedRetryAsync(
+            () => InvokeCoreAsync<T>(methodName, request, cancellationToken),
+            cancellationToken);
+    }
+
+    public async Task InvokeCommandAsync(
+        string methodName,
+        object? request,
+        CancellationToken cancellationToken)
+    {
+        _ = await InvokeWithUnauthorizedRetryAsync(
+            async () =>
+            {
+                await InvokeCommandCoreAsync(methodName, request, cancellationToken);
+                return true;
+            },
+            cancellationToken);
+    }
+
+    private async Task<T> InvokeWithUnauthorizedRetryAsync<T>(
+        Func<Task<T>> invokeAsync,
         CancellationToken cancellationToken)
     {
         await StartAsync(cancellationToken);
 
         try
         {
-            return await InvokeCoreAsync<T>(methodName, request, cancellationToken);
+            return await invokeAsync();
         }
         catch (Exception exception) when (IsUnauthorized(exception))
         {
@@ -172,7 +195,7 @@ internal sealed class SignalRConnection : ISignalRConnection
             await RestartAsync(cancellationToken);
             try
             {
-                return await InvokeCoreAsync<T>(methodName, request, cancellationToken);
+                return await invokeAsync();
             }
             catch (Exception retryException) when (IsUnauthorized(retryException))
             {
@@ -401,16 +424,38 @@ internal sealed class SignalRConnection : ISignalRConnection
         object? request,
         CancellationToken cancellationToken)
     {
+        var envelope = await InvokeEnvelopeAsync(
+            methodName,
+            request,
+            cancellationToken);
+        return _decoder.Decode<T>(envelope, methodName);
+    }
+
+    private async Task InvokeCommandCoreAsync(
+        string methodName,
+        object? request,
+        CancellationToken cancellationToken)
+    {
+        var envelope = await InvokeEnvelopeAsync(
+            methodName,
+            request,
+            cancellationToken);
+        _decoder.ValidateCommand(envelope, methodName);
+    }
+
+    private async Task<HubEnvelope<byte[]>> InvokeEnvelopeAsync(
+        string methodName,
+        object? request,
+        CancellationToken cancellationToken)
+    {
         var hub = GetActiveHub()
             ?? throw new AppException(
                 AppErrorKind.Transport,
                 "The SignalR connection is not available.");
-        var envelope = await hub.InvokeCoreAsync<HubEnvelope<byte[]>>(
+        return await hub.InvokeCoreAsync<HubEnvelope<byte[]>>(
             methodName,
             new object?[] { request, new { UseGzip = true } },
             cancellationToken);
-
-        return _decoder.Decode<T>(envelope, methodName);
     }
 
     private static bool IsUnauthorized(Exception exception)

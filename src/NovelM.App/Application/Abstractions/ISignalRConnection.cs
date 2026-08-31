@@ -18,4 +18,9 @@ public interface ISignalRConnection
         string methodName,
         object? request,
         CancellationToken cancellationToken);
+
+    Task InvokeCommandAsync(
+        string methodName,
+        object? request,
+        CancellationToken cancellationToken);
 }

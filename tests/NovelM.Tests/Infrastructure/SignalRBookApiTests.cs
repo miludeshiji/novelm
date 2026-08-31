@@ -212,5 +212,13 @@ public sealed class SignalRBookApiTests
             Assert.IsInstanceOfType<T>(_response);
             return Task.FromResult((T)(object)_response!);
         }
+
+        public Task InvokeCommandAsync(
+            string methodName,
+            object? request,
+            CancellationToken cancellationToken)
+        {
+            throw new AssertFailedException("InvokeCommandAsync was not expected.");
+        }
     }
 }
